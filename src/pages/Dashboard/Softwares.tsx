@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { collectionGroup, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { libraryDb } from '@/firebase/config';
 
 // Make fields optional or with fallbacks in case Firebase schema differs
@@ -52,19 +52,12 @@ export const Softwares = () => {
   const { data: owners = [], isLoading } = useQuery({
     queryKey: ['libraryOwners'],
     queryFn: async () => {
-      // Use collectionGroup because parent 'libraries' docs might not exist
-      const settingsSnapshot = await getDocs(collectionGroup(libraryDb, 'settings'));
+      // Library details are now directly in the 'libraries' collection
+      const librariesSnapshot = await getDocs(collection(libraryDb, 'libraries'));
       
-      const ownerProfiles = settingsSnapshot.docs.filter(d => d.id === 'ownerProfile');
-      
-      const ownerPromises = ownerProfiles.map(async (ownerDoc) => {
-        // The path is libraries/{libId}/settings/ownerProfile
-        // So parent is settings, parent's parent is the library doc
-        const libRef = ownerDoc.ref.parent.parent;
-        if (!libRef) return null;
-        
-        const libId = libRef.id;
-        const ownerData = ownerDoc.data();
+      const ownerPromises = librariesSnapshot.docs.map(async (libDoc) => {
+        const libId = libDoc.id;
+        const ownerData = libDoc.data();
         let subData: any = {};
         
         try {

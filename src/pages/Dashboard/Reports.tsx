@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { collection, collectionGroup, getDocs } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { univoDb, libraryDb } from '@/firebase/config';
 
 type Tab = 'Daily' | 'Monthly' | 'Custom';
@@ -36,42 +36,48 @@ export const Reports = () => {
   const { data: libraryData = [], isLoading: isLoadingLibrary } = useQuery({
     queryKey: ['report_library_list'],
     queryFn: async () => {
-      const snap = await getDocs(collectionGroup(libraryDb, 'settings'));
-      const profiles = snap.docs.filter(d => d.id === 'ownerProfile');
-      
-      const results = await Promise.all(profiles.map(async docSnap => {
-        const d = docSnap.data();
-        const libId = docSnap.ref.parent.parent?.id || docSnap.id;
-        
-        let planName = 'Trial';
-        let amount = 0;
+      // Fetch all libraries to map tenantId to library name
+      const libsSnap = await getDocs(collection(libraryDb, 'libraries'));
+      const libMap: Record<string, string> = {};
+      libsSnap.docs.forEach(d => {
+        const data = d.data();
+        libMap[d.id] = data.studyPointName || data.libraryName || 'Unknown Library';
+      });
 
-        try {
-          // Fetch current subscription
-          const { doc, getDoc } = await import('firebase/firestore');
-          const subRef = doc(libraryDb, `libraries/${libId}/subscriptions/current`);
-          const subDoc = await getDoc(subRef);
-          
-          if (subDoc.exists()) {
-             const subData = subDoc.data();
-             planName = subData.planName || subData.plan || 'Trial';
-             // If trial, amount is 0, else 1500 (can be updated to dynamic later)
-             amount = planName.toLowerCase().includes('trial') ? 0 : 1500;
-          }
-        } catch(e) {}
-
-        const city = d.address || d.city || '-';
-
+      // 1. Fetch transactions (subscriptions)
+      const transSnap = await getDocs(collection(libraryDb, 'transactions'));
+      const transData = transSnap.docs.map(doc => {
+        const d = doc.data();
+        const libName = libMap[d.tenantId] || 'Unknown Library';
         return {
-          id: libId,
-          title: d.studyPointName || d.libraryName || 'Unknown Library',
-          subtitle: d.ownerName || 'Unknown Owner',
-          extraInfo: `${city} • ${planName}`,
-          amount: amount, 
-          date: new Date().toISOString()
+          id: doc.id,
+          title: libName,
+          subtitle: `Subscription: ${d.planName || 'Unknown Plan'}`,
+          extraInfo: `${d.purchasedAt ? new Date(d.purchasedAt).toLocaleDateString('en-IN') : '-'} • ${d.razorpayPaymentId || '-'}`,
+          amount: Number(d.amountPaid || d.amount || 0),
+          date: d.purchasedAt || new Date().toISOString()
         };
-      }));
-      return results;
+      });
+
+      // 2. Fetch whatsapp_purchases
+      const wpSnap = await getDocs(collection(libraryDb, 'whatsapp_purchases'));
+      const wpData = wpSnap.docs.map(doc => {
+        const d = doc.data();
+        const libName = libMap[d.tenantId] || 'Unknown Library';
+        return {
+          id: doc.id,
+          title: libName,
+          subtitle: `WhatsApp Pack: ${d.planName || '-'}`,
+          extraInfo: `${d.purchasedAt ? new Date(d.purchasedAt).toLocaleDateString('en-IN') : '-'} • ${d.razorpayPaymentId || '-'}`,
+          amount: Number(d.amountPaid || d.amount || 0),
+          date: d.purchasedAt || new Date().toISOString()
+        };
+      });
+
+      // Combine and sort by date descending
+      const combined = [...transData, ...wpData].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      
+      return combined;
     },
     enabled: source === 'Library'
   });

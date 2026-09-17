@@ -1,6 +1,6 @@
 
 import { useQuery } from '@tanstack/react-query';
-import { collection, collectionGroup, getDocs, doc, getDoc } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { univoDb, libraryDb } from '@/firebase/config';
 
 export const Dashboard = () => {
@@ -17,27 +17,37 @@ export const Dashboard = () => {
   const { data: libraryStats = { total: 0, revenue: 0 } } = useQuery({
     queryKey: ['dashboard_libraries'],
     queryFn: async () => {
-      const snap = await getDocs(collectionGroup(libraryDb, 'settings'));
-      const profiles = snap.docs.filter(d => d.id === 'ownerProfile');
+      // 1. Get total libraries count
+      const libSnap = await getDocs(collection(libraryDb, 'libraries'));
+      const totalLibraries = libSnap.docs.length;
       
       let totalRevenue = 0;
       
-      await Promise.all(profiles.map(async docSnap => {
-        const libId = docSnap.ref.parent.parent?.id || docSnap.id;
-        try {
-          const subRef = doc(libraryDb, `libraries/${libId}/subscriptions/current`);
-          const subDoc = await getDoc(subRef);
-          if (subDoc.exists()) {
-             const subData = subDoc.data();
-             const planName = subData.planName || subData.plan || 'Trial';
-             if (!planName.toLowerCase().includes('trial')) {
-               totalRevenue += 1500; // still using 1500 per paid user, or adjust logic if amount is in db
-             }
-          }
-        } catch(e) {}
-      }));
+      // 2. Sum up Subscription Transactions
+      try {
+        const transSnap = await getDocs(collection(libraryDb, 'transactions'));
+        transSnap.docs.forEach(doc => {
+          const d = doc.data();
+          const amount = d.amountPaid || d.amount || 0;
+          totalRevenue += Number(amount);
+        });
+      } catch (e) {
+        console.error("Error fetching transactions:", e);
+      }
       
-      return { total: profiles.length, revenue: totalRevenue };
+      // 3. Sum up WhatsApp Purchases
+      try {
+        const wpSnap = await getDocs(collection(libraryDb, 'whatsapp_purchases'));
+        wpSnap.docs.forEach(doc => {
+          const d = doc.data();
+          const amount = d.amountPaid || d.amount || 0;
+          totalRevenue += Number(amount);
+        });
+      } catch (e) {
+        console.error("Error fetching whatsapp_purchases:", e);
+      }
+      
+      return { total: totalLibraries, revenue: totalRevenue };
     }
   });
 
