@@ -1,0 +1,166 @@
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where, orderBy } from 'firebase/firestore';
+import { univoDb } from '../config';
+
+/**
+ * Capture device native GPS coordinates with high accuracy
+ */
+export const getCurrentGPSLocation = () => {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('Geolocation is not supported by your browser or device.'));
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude, longitude, accuracy } = pos.coords;
+        resolve({
+          latitude,
+          longitude,
+          accuracy: Math.round(accuracy),
+          mapsUrl: `https://www.google.com/maps?q=${latitude},${longitude}`,
+          capturedAt: new Date().toISOString(),
+        });
+      },
+      (err) => {
+        let msg = 'Failed to retrieve location.';
+        if (err.code === 1) msg = 'Location permission denied. Please allow location access in your browser settings to verify on-site visit.';
+        else if (err.code === 2) msg = 'Location position unavailable. Please ensure GPS is enabled.';
+        else if (err.code === 3) msg = 'Location request timed out. Please retry.';
+        reject(new Error(msg));
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
+    );
+  });
+};
+
+// ── Field Visits & Leads Management ──────────────────────────────────────────
+
+export const getFieldVisits = async () => {
+  try {
+    const q = query(collection(univoDb, 'field_visits'), orderBy('createdAt', 'desc'));
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
+    }));
+  } catch (err) {
+    console.warn('Fallback field visits fetch:', err);
+    try {
+      const snap = await getDocs(collection(univoDb, 'field_visits'));
+      return snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    } catch (e) {
+      console.error('Error fetching field visits:', e);
+      return [];
+    }
+  }
+};
+
+export const logFieldVisit = async (visitData) => {
+  const cleaned = {
+    staffId: visitData.staffId || 'admin',
+    staffName: visitData.staffName || 'Administrator',
+    clientType: visitData.clientType || 'Library', // 'Library' | 'Gym' | 'Coaching' | 'Other'
+    businessName: visitData.businessName.trim(),
+    ownerName: visitData.ownerName ? visitData.ownerName.trim() : 'Owner',
+    phone: visitData.phone ? visitData.phone.trim() : '',
+    state: visitData.state ? visitData.state.trim() : '',
+    city: visitData.city ? visitData.city.trim() : '',
+    address: visitData.address ? visitData.address.trim() : '',
+    discussionNotes: visitData.discussionNotes ? visitData.discussionNotes.trim() : '',
+    demoGiven: Boolean(visitData.demoGiven),
+    status: visitData.status || 'Interested', // 'Interested' | 'Demo Given' | 'Follow Up' | 'Deal Closed' | 'Not Interested'
+    followUpDate: visitData.followUpDate || '',
+    location: visitData.location || null, // { latitude, longitude, accuracy, mapsUrl }
+    checkInTime: visitData.checkInTime || new Date().toISOString(),
+    checkOutTime: visitData.checkOutTime || new Date().toISOString(),
+    durationMinutes: Number(visitData.durationMinutes) || 0,
+    createdAt: new Date().toISOString(),
+  };
+
+  const ref = await addDoc(collection(univoDb, 'field_visits'), cleaned);
+  return { id: ref.id, ...cleaned };
+};
+
+export const deleteFieldVisit = async (id) => {
+  return await deleteDoc(doc(univoDb, 'field_visits', id));
+};
+
+// ── Daily Staff Attendance & Timelines ────────────────────────────────────────
+
+export const getAttendanceLogs = async () => {
+  try {
+    const q = query(collection(univoDb, 'staff_attendance'), orderBy('date', 'desc'));
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
+    }));
+  } catch (err) {
+    try {
+      const snap = await getDocs(collection(univoDb, 'staff_attendance'));
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    } catch (e) {
+      return [];
+    }
+  }
+};
+
+export const punchAttendance = async ({ staffId, staffName, type = 'in', location = null }) => {
+  const todayDate = new Date().toISOString().split('T')[0];
+  const q = query(
+    collection(univoDb, 'staff_attendance'),
+    where('staffId', '==', staffId),
+    where('date', '==', todayDate)
+  );
+  const snap = await getDocs(q);
+
+  const now = new Date();
+  const timeFormatted = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+
+  if (snap.empty) {
+    // New Punch In
+    const docData = {
+      staffId,
+      staffName,
+      date: todayDate,
+      punchIn: {
+        time: timeFormatted,
+        isoTime: now.toISOString(),
+        location,
+      },
+      punchOut: null,
+      totalHours: 'Working...',
+      status: 'Present',
+      createdAt: now.toISOString(),
+    };
+    const ref = await addDoc(collection(univoDb, 'staff_attendance'), docData);
+    return { id: ref.id, ...docData };
+  } else {
+    // Existing record today
+    const existingDoc = snap.docs[0];
+    const data = existingDoc.data();
+
+    if (type === 'out') {
+      const inIso = data.punchIn?.isoTime ? new Date(data.punchIn.isoTime) : now;
+      const diffMs = now.getTime() - inIso.getTime();
+      const diffHours = (diffMs / (1000 * 60 * 60)).toFixed(1);
+
+      const updateData = {
+        punchOut: {
+          time: timeFormatted,
+          isoTime: now.toISOString(),
+          location,
+        },
+        totalHours: `${diffHours} hrs`,
+        updatedAt: now.toISOString(),
+      };
+
+      await updateDoc(doc(univoDb, 'staff_attendance', existingDoc.id), updateData);
+      return { id: existingDoc.id, ...data, ...updateData };
+    }
+    return { id: existingDoc.id, ...data };
+  }
+};
