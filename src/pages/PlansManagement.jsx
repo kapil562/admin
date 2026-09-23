@@ -179,6 +179,7 @@ export const PlansManagement = () => {
       offerPrice: Number(subForm.offerPrice) || 0,
       durationDays: Number(subForm.durationDays) || 30,
       maxStudents: Number(subForm.maxStudents) || 100,
+      features: subForm.features.map(f => f.trim()).filter(Boolean),
     });
   };
 
@@ -361,6 +362,23 @@ export const PlansManagement = () => {
                       </span>
                     </div>
                   </div>
+
+                  {/* Marketing Features */}
+                  {(plan.features && plan.features.length > 0) && (
+                    <div className="mt-4">
+                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                        Marketing Features
+                      </p>
+                      <div className="flex flex-col gap-1.5">
+                        {plan.features.map((feat, idx) => (
+                          <div key={idx} className="flex items-start gap-1.5 text-xs text-slate-700 font-medium">
+                            <Check size={14} className="text-blue-500 shrink-0 mt-0.5" />
+                            <span>{feat}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Allowed Modules */}
                   <div className="mt-4">
@@ -733,11 +751,39 @@ export const PlansManagement = () => {
             </div>
           </div>
 
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+              Custom Marketing Features (One per line)
+            </label>
+            <textarea
+              rows={3}
+              placeholder="e.g. 24/7 Support&#10;Premium Analytics"
+              value={subForm.features.join('\n')}
+              onChange={(e) => setSubForm({ ...subForm, features: e.target.value.split('\n') })}
+              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600 resize-y"
+            />
+          </div>
+
           {/* Module Toggles */}
           <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-              Accessible Features & Modules
-            </label>
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                Accessible Features & Modules
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  if (subForm.modules.length === AVAILABLE_MODULES.length) {
+                    setSubForm({ ...subForm, modules: [] });
+                  } else {
+                    setSubForm({ ...subForm, modules: [...AVAILABLE_MODULES] });
+                  }
+                }}
+                className="text-xs font-bold text-blue-600 hover:text-blue-800 transition cursor-pointer"
+              >
+                {subForm.modules.length === AVAILABLE_MODULES.length ? 'Deselect All' : 'Select All'}
+              </button>
+            </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200/80 max-h-48 overflow-y-auto">
               {AVAILABLE_MODULES.map((mod) => {
                 const isSelected = subForm.modules.includes(mod);
