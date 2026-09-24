@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getLibraryClients,
@@ -41,6 +42,7 @@ import toast from 'react-hot-toast';
 
 export const LibraryClients = () => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
   const [selectedClient, setSelectedClient] = useState(null);
@@ -236,7 +238,11 @@ export const LibraryClients = () => {
             <tbody className="divide-y divide-slate-100 text-sm">
               {filteredClients.length > 0 ? (
                 filteredClients.map((client) => (
-                  <tr key={client.id} className="hover:bg-slate-50/70 transition-colors">
+                  <tr 
+                    key={client.id} 
+                    onClick={() => navigate(`/clients/${client.id}`)}
+                    className="hover:bg-slate-50/70 transition-colors cursor-pointer"
+                  >
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
                         <div className="w-9 h-9 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 font-bold text-xs shrink-0">
@@ -297,7 +303,10 @@ export const LibraryClients = () => {
                     <td className="px-5 py-4 text-right whitespace-nowrap">
                       <div className="flex items-center justify-end gap-2">
                         <button
-                          onClick={() => setSelectedClient(client)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedClient(client);
+                          }}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition cursor-pointer"
                           title="Inspect Details"
                         >

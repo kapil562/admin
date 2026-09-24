@@ -340,3 +340,39 @@ export const restoreOrCreateLibraryClient = async ({
   return { tenantId: resolvedId, ...libData };
 };
 
+
+/**
+ * Fetch comprehensive details for a specific library tenant.
+ * Includes library doc, subscription doc, students count, membership plans, and sections.
+ */
+export const getLibraryDetails = async (tenantId) => {
+  if (!tenantId) throw new Error('Tenant ID required');
+
+  const libDoc = await getDoc(doc(libraryDb, 'libraries', tenantId));
+  const subDoc = await getDoc(doc(libraryDb, 'subscriptions', tenantId));
+
+  const libraryData = libDoc.exists() ? { id: libDoc.id, ...libDoc.data() } : null;
+  const subscriptionData = subDoc.exists() ? { id: subDoc.id, ...subDoc.data() } : null;
+
+  if (!libraryData) throw new Error('Library not found');
+
+  // Fetch sections
+  const sectionsSnap = await getDocs(collection(libraryDb, 'libraries', tenantId, 'sections'));
+  const sections = sectionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  // Fetch memberships
+  const membershipsSnap = await getDocs(collection(libraryDb, 'libraries', tenantId, 'membershipPlans'));
+  const memberships = membershipsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  // Fetch students
+  const studentsSnap = await getDocs(collection(libraryDb, 'libraries', tenantId, 'students'));
+  const students = studentsSnap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a,b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+
+  return {
+    library: libraryData,
+    subscription: subscriptionData,
+    sections,
+    memberships,
+    students,
+  };
+};

@@ -10,6 +10,7 @@ import { DashboardLayout } from './components/layout/DashboardLayout';
 import { Login } from './pages/Login';
 import { Dashboard } from './pages/Dashboard';
 import { LibraryClients } from './pages/LibraryClients';
+import { LibraryDetails } from './pages/LibraryDetails';
 import { Finances } from './pages/Finances';
 import { PlansManagement } from './pages/PlansManagement';
 import { UserQueries } from './pages/UserQueries';
@@ -61,6 +62,7 @@ export default function App() {
               <Route path="/marketing" element={<FieldMarketing />} />
               <Route path="/attendance" element={<StaffAttendance />} />
               <Route path="/clients" element={<LibraryClients />} />
+              <Route path="/clients/:id" element={<LibraryDetails />} />
               <Route path="/finances" element={<Finances />} />
               <Route path="/plans" element={<PlansManagement />} />
               <Route path="/queries" element={<UserQueries />} />
