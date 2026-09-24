@@ -17,6 +17,8 @@ import { Reports } from './pages/Reports';
 import { FieldMarketing } from './pages/FieldMarketing';
 import { StaffAttendance } from './pages/StaffAttendance';
 import { StaffManagement } from './pages/StaffManagement';
+import { CouponsManagement } from './pages/CouponsManagement';
+
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -64,6 +66,8 @@ export default function App() {
               <Route path="/queries" element={<UserQueries />} />
               <Route path="/reports" element={<Reports />} />
               <Route path="/staff" element={<StaffManagement />} />
+              <Route path="/coupons" element={<CouponsManagement />} />
+
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>

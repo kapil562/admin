@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getSubscriptionPlans,
@@ -8,6 +8,8 @@ import {
   saveWhatsAppPlan,
   deleteWhatsAppPlan,
   AVAILABLE_MODULES,
+  getReferralSettings,
+  saveReferralSettings,
 } from '../firebase/services/planService';
 import {
   getSoftwareVerticals,
@@ -36,6 +38,7 @@ import {
   Sparkles,
   ToggleLeft,
   ToggleRight,
+  Gift,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -54,6 +57,8 @@ export const PlansManagement = () => {
     offerPrice: '',
     discountText: '',
     maxStudents: 100,
+    purchaseLimit: 0,
+    purchasedCount: 0,
     modules: ['Dashboard', 'Settings'],
     features: ['Unlimited Seats', 'Standard Support'],
     isActive: true,
@@ -71,6 +76,14 @@ export const PlansManagement = () => {
     isActive: true,
   });
 
+  const [referralForm, setReferralForm] = useState({
+    refereeDiscountType: 'percentage',
+    refereeDiscountValue: 10,
+    referrerRewardType: 'flat',
+    referrerRewardValue: 500,
+    isActive: true,
+  });
+
   // 1. Queries
   const { data: subPlans = [], isLoading: loadingSub } = useQuery({
     queryKey: ['admin_sub_plans'],
@@ -85,6 +98,20 @@ export const PlansManagement = () => {
   const { data: verticals = [], isLoading: loadingVert } = useQuery({
     queryKey: ['software_verticals'],
     queryFn: getSoftwareVerticals,
+  });
+
+  const { data: referralConfig, isLoading: loadingReferral } = useQuery({
+    queryKey: ['referral_config'],
+    queryFn: getReferralSettings,
+  });
+
+  const referralMutation = useMutation({
+    mutationFn: saveReferralSettings,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['referral_config'] });
+      toast.success('Referral settings updated successfully');
+    },
+    onError: (err) => toast.error(err.message || 'Failed to update referral settings'),
   });
 
   const toggleVerticalMutation = useMutation({
@@ -135,6 +162,19 @@ export const PlansManagement = () => {
     onError: (e) => toast.error(e.message || 'Error deleting pack'),
   });
 
+  // Effect for referral settings
+  useEffect(() => {
+    if (referralConfig) {
+      setReferralForm({
+        refereeDiscountType: referralConfig.refereeDiscountType || 'percentage',
+        refereeDiscountValue: referralConfig.refereeDiscountValue || 10,
+        referrerRewardType: referralConfig.referrerRewardType || 'flat',
+        referrerRewardValue: referralConfig.referrerRewardValue || 500,
+        isActive: referralConfig.isActive !== undefined ? referralConfig.isActive : true,
+      });
+    }
+  }, [referralConfig]);
+
   // Handlers for Subscription
   const openSubModal = (plan = null) => {
     if (plan) {
@@ -142,11 +182,13 @@ export const PlansManagement = () => {
       setSubForm({
         name: plan.name || '',
         durationLabel: plan.durationLabel || '/mo',
-        durationDays: plan.durationDays || 30,
+        durationDays: plan.durationDays ?? 30,
         originalPrice: plan.originalPrice || '',
         offerPrice: plan.offerPrice || '',
         discountText: plan.discountText || '',
-        maxStudents: plan.maxStudents || 100,
+        maxStudents: plan.maxStudents ?? 0,
+        purchaseLimit: plan.purchaseLimit ?? 0,
+        purchasedCount: plan.purchasedCount ?? 0,
         modules: plan.modules || ['Dashboard', 'Settings'],
         features: plan.features || ['Unlimited Seats'],
         isActive: plan.isActive !== undefined ? plan.isActive : true,
@@ -160,7 +202,9 @@ export const PlansManagement = () => {
         originalPrice: '',
         offerPrice: '',
         discountText: '',
-        maxStudents: 100,
+        maxStudents: 0,
+        purchaseLimit: 0,
+        purchasedCount: 0,
         modules: ['Dashboard', 'Settings'],
         features: ['Unlimited Seats', 'Standard Support'],
         isActive: true,
@@ -177,8 +221,10 @@ export const PlansManagement = () => {
       id: editingSubPlan?.id,
       originalPrice: Number(subForm.originalPrice) || 0,
       offerPrice: Number(subForm.offerPrice) || 0,
-      durationDays: Number(subForm.durationDays) || 30,
-      maxStudents: Number(subForm.maxStudents) || 100,
+      durationDays: Number(subForm.durationDays) || 0,
+      maxStudents: Number(subForm.maxStudents) || 0,
+      purchaseLimit: Number(subForm.purchaseLimit) || 0,
+      purchasedCount: subForm.purchasedCount || 0,
       features: subForm.features.map(f => f.trim()).filter(Boolean),
     });
   };
@@ -298,21 +344,36 @@ export const PlansManagement = () => {
           <Layers size={16} />
           <span>Software Verticals ({verticals.length})</span>
         </button>
+        <button
+          onClick={() => setActiveTab('referrals')}
+          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer flex-1 sm:flex-none justify-center ${
+            activeTab === 'referrals'
+              ? 'bg-rose-600 text-white shadow-xs'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Gift size={16} />
+          <span>Referral Config</span>
+        </button>
       </div>
 
       {/* Tab 1: SaaS Subscription Plans */}
       {activeTab === 'subscription' && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {subPlans.length > 0 ? (
-            subPlans.map((plan) => (
+            subPlans.map((plan) => {
+              const isSoldOut = plan.purchaseLimit > 0 && (plan.purchasedCount || 0) >= plan.purchaseLimit;
+              const displayActive = plan.isActive && !isSoldOut;
+              
+              return (
               <div
                 key={plan.id}
-                className="bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition p-6 flex flex-col justify-between relative overflow-hidden"
+                className={`bg-white rounded-2xl border border-slate-200/80 shadow-xs hover:shadow-md transition p-6 flex flex-col justify-between relative overflow-hidden ${isSoldOut ? 'opacity-80 grayscale-[20%]' : ''}`}
               >
                 {/* Active Indicator Top Bar */}
                 <div
                   className={`absolute top-0 inset-x-0 h-1.5 ${
-                    plan.isActive ? 'bg-blue-600' : 'bg-slate-300'
+                    displayActive ? 'bg-blue-600' : isSoldOut ? 'bg-rose-500' : 'bg-slate-300'
                   }`}
                 />
 
@@ -321,8 +382,8 @@ export const PlansManagement = () => {
                     <h3 className="text-lg font-extrabold text-slate-900 truncate">
                       {plan.name}
                     </h3>
-                    <Badge variant={plan.isActive ? 'success' : 'neutral'} size="sm">
-                      {plan.isActive ? 'Active' : 'Draft'}
+                    <Badge variant={displayActive ? 'success' : isSoldOut ? 'danger' : 'neutral'} size="sm">
+                      {isSoldOut ? 'Sold Out' : plan.isActive ? 'Active' : 'Draft'}
                     </Badge>
                   </div>
 
@@ -336,9 +397,11 @@ export const PlansManagement = () => {
                           {formatCurrency(plan.originalPrice)}
                         </span>
                       )}
-                      <span className="text-xs text-slate-500 font-semibold">
-                        {plan.durationLabel || `/${plan.durationDays}d`}
-                      </span>
+                      {plan.durationDays > 0 && (
+                        <span className="text-xs text-slate-500 font-semibold">
+                          {plan.durationLabel || `/${plan.durationDays}d`}
+                        </span>
+                      )}
                     </div>
                     {plan.discountText && (
                       <span className="inline-block mt-1 text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded">
@@ -358,9 +421,17 @@ export const PlansManagement = () => {
                     <div className="flex items-center justify-between">
                       <span className="text-slate-400 font-medium">Validity Duration:</span>
                       <span className="font-bold text-slate-800">
-                        {plan.durationDays} Days
+                        {plan.durationDays > 0 ? `${plan.durationDays} Days` : 'Lifetime'}
                       </span>
                     </div>
+                    {plan.purchaseLimit > 0 && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-400 font-medium">Purchase Limit:</span>
+                        <span className="font-bold text-rose-600">
+                          {plan.purchasedCount || 0} / {plan.purchaseLimit} Sold
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Marketing Features */}
@@ -421,7 +492,8 @@ export const PlansManagement = () => {
                   </button>
                 </div>
               </div>
-            ))
+              );
+            })
           ) : (
             <div className="col-span-full">
               <EmptyState
@@ -643,6 +715,122 @@ export const PlansManagement = () => {
       )}
 
       {/* Modal 1: SaaS Subscription Plan */}
+      {/* Tab 4: Referral Config */}
+      {activeTab === 'referrals' && (
+        <div className="max-w-3xl mx-auto space-y-6">
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6">
+            <div className="flex items-center gap-3 mb-6 border-b border-slate-100 pb-4">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center">
+                <Gift size={20} />
+              </div>
+              <div>
+                <h3 className="text-lg font-black text-slate-900">Referral Program Settings</h3>
+                <p className="text-sm text-slate-500 font-medium">Control the rewards for new signups and referrers</p>
+              </div>
+            </div>
+
+            {loadingReferral ? (
+              <div className="py-10 flex justify-center"><LoadingSpinner /></div>
+            ) : (
+              <form 
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  referralMutation.mutate(referralForm);
+                }}
+                className="space-y-6"
+              >
+                {/* Referee Config */}
+                <div className="bg-slate-50 rounded-xl p-5 border border-slate-200">
+                  <h4 className="text-sm font-bold text-slate-800 mb-4">New User Discount (Referee)</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Discount Type</label>
+                      <select
+                        value={referralForm.refereeDiscountType}
+                        onChange={e => setReferralForm(prev => ({ ...prev, refereeDiscountType: e.target.value }))}
+                        className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
+                      >
+                        <option value="percentage">Percentage (%)</option>
+                        <option value="flat">Flat Amount (₹)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Discount Value</label>
+                      <input
+                        type="number"
+                        required
+                        value={referralForm.refereeDiscountValue}
+                        onChange={e => setReferralForm(prev => ({ ...prev, refereeDiscountValue: e.target.value }))}
+                        className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-blue-600 outline-none focus:border-blue-600"
+                        placeholder="e.g. 10"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Referrer Config */}
+                <div className="bg-slate-50 rounded-xl p-5 border border-slate-200">
+                  <h4 className="text-sm font-bold text-slate-800 mb-4">Referrer Reward (Existing Owner)</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Reward Type</label>
+                      <select
+                        value={referralForm.referrerRewardType}
+                        onChange={e => setReferralForm(prev => ({ ...prev, referrerRewardType: e.target.value }))}
+                        className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
+                      >
+                        <option value="percentage">Percentage (%)</option>
+                        <option value="flat">Flat Amount (₹)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Reward Value</label>
+                      <input
+                        type="number"
+                        required
+                        value={referralForm.referrerRewardValue}
+                        onChange={e => setReferralForm(prev => ({ ...prev, referrerRewardValue: e.target.value }))}
+                        className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-bold text-emerald-600 outline-none focus:border-blue-600"
+                        placeholder="e.g. 500"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Status & Submit */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-2">
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setReferralForm(prev => ({ ...prev, isActive: !prev.isActive }))}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none cursor-pointer ${
+                        referralForm.isActive ? 'bg-emerald-500' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          referralForm.isActive ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                    <span className="text-sm font-bold text-slate-700">
+                      Referral System is {referralForm.isActive ? 'Active' : 'Disabled'}
+                    </span>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={referralMutation.isPending}
+                    className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+                  >
+                    {referralMutation.isPending ? 'Saving...' : 'Save Referral Settings'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
       <Modal
         isOpen={subModalOpen}
         onClose={() => setSubModalOpen(false)}
@@ -683,12 +871,12 @@ export const PlansManagement = () => {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Duration (Days)
+                Duration Days (0 = Lifetime)
               </label>
               <input
                 type="number"
                 required
-                placeholder="30"
+                placeholder="0 for Lifetime"
                 value={subForm.durationDays}
                 onChange={(e) => setSubForm({ ...subForm, durationDays: e.target.value })}
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
@@ -723,16 +911,29 @@ export const PlansManagement = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Max Student Limit
+                Student Limit (0 = Unltd)
               </label>
               <input
                 type="number"
-                placeholder="100"
+                placeholder="0 for Unlimited"
                 value={subForm.maxStudents}
                 onChange={(e) => setSubForm({ ...subForm, maxStudents: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1" title="Plan will auto-disable after these many sales">
+                Purchase Limit (0 = Unltd)
+              </label>
+              <input
+                type="number"
+                placeholder="e.g. 50"
+                value={subForm.purchaseLimit}
+                onChange={(e) => setSubForm({ ...subForm, purchaseLimit: e.target.value })}
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
               />
             </div>
@@ -743,7 +944,7 @@ export const PlansManagement = () => {
               </label>
               <input
                 type="text"
-                placeholder="e.g. Save 20%, Best Seller"
+                placeholder="e.g. Save 20%"
                 value={subForm.discountText}
                 onChange={(e) => setSubForm({ ...subForm, discountText: e.target.value })}
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"

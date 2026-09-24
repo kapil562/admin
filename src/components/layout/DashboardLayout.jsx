@@ -13,6 +13,8 @@ import {
   Menu,
   X,
   ChevronRight,
+  Ticket,
+
   ShieldCheck,
   Navigation,
   CalendarCheck,
@@ -47,6 +49,8 @@ const navigationGroups = [
     items: [
       { name: 'Expenses & Utility', path: '/finances', icon: Wallet, module: 'finances' },
       { name: 'Plans & Pricing', path: '/plans', icon: Sparkles, module: 'plans' },
+      { name: 'Coupons & Promos', path: '/coupons', icon: Ticket, module: 'coupons' },
+
       { name: 'Staff & Roles', path: '/staff', icon: UserCog, module: 'staff' },
     ],
   },

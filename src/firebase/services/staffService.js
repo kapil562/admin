@@ -8,6 +8,7 @@ export const PERMISSION_MODULES = [
   { id: 'clients', label: 'Library Clients Directory', actions: ['view', 'create', 'edit', 'delete'] },
   { id: 'finances', label: 'Company Finances & Expenses', actions: ['view', 'create', 'edit', 'delete'] },
   { id: 'plans', label: 'Plans & Pricing Management', actions: ['view', 'create', 'edit', 'delete'] },
+  { id: 'coupons', label: 'Coupons & Promos Management', actions: ['view', 'create', 'edit', 'delete'] },
   { id: 'queries', label: 'User Queries & Support', actions: ['view', 'edit'] },
   { id: 'reports', label: 'Financial Reports & Ledger', actions: ['view'] },
   { id: 'staff', label: 'Staff & Role Management', actions: ['view', 'create', 'edit', 'delete'] },

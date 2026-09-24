@@ -1,4 +1,4 @@
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore';
 import { libraryDb } from '../config';
 
 export const AVAILABLE_MODULES = [
@@ -34,11 +34,13 @@ export const saveSubscriptionPlan = async (planData) => {
   const cleaned = {
     name: data.name || 'Custom Plan',
     durationLabel: data.durationLabel || '/mo',
-    durationDays: Number(data.durationDays) || 30,
+    durationDays: Number(data.durationDays) || 0,
     originalPrice: Number(data.originalPrice) || 0,
     offerPrice: Number(data.offerPrice) || 0,
     discountText: data.discountText || '',
-    maxStudents: Number(data.maxStudents) || 100,
+    maxStudents: Number(data.maxStudents) || 0,
+    purchaseLimit: Number(data.purchaseLimit) || 0,
+    purchasedCount: Number(data.purchasedCount) || 0,
     modules: Array.isArray(data.modules) ? data.modules : ['Dashboard', 'Settings'],
     features: Array.isArray(data.features) ? data.features : [],
     isActive: data.isActive !== undefined ? Boolean(data.isActive) : true,
@@ -89,4 +91,33 @@ export const saveWhatsAppPlan = async (planData) => {
 
 export const deleteWhatsAppPlan = async (id) => {
   return await deleteDoc(doc(libraryDb, 'whatsapp_plans', id));
+};
+
+// ── Referral Settings ───────────────────────────────────────────────────
+
+export const getReferralSettings = async () => {
+  const ref = doc(libraryDb, 'admin_settings', 'referral_config');
+  const snap = await getDoc(ref);
+  if (snap.exists()) {
+    return snap.data();
+  }
+  return {
+    refereeDiscountType: 'percentage', // 'percentage' or 'flat'
+    refereeDiscountValue: 10,
+    referrerRewardType: 'flat', // 'percentage' or 'flat'
+    referrerRewardValue: 500,
+    isActive: true
+  };
+};
+
+export const saveReferralSettings = async (data) => {
+  const ref = doc(libraryDb, 'admin_settings', 'referral_config');
+  await setDoc(ref, {
+    refereeDiscountType: data.refereeDiscountType || 'percentage',
+    refereeDiscountValue: Number(data.refereeDiscountValue) || 0,
+    referrerRewardType: data.referrerRewardType || 'flat',
+    referrerRewardValue: Number(data.referrerRewardValue) || 0,
+    isActive: Boolean(data.isActive)
+  });
+  return data;
 };
