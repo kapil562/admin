@@ -66,6 +66,7 @@ export const getLibraryClients = async () => {
           status,
           expiryDate: expiryDate || null,
           registeredDate,
+          createdAt: data.createdAt,
           rawSub: subData,
         };
       })

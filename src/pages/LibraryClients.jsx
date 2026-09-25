@@ -45,6 +45,8 @@ export const LibraryClients = () => {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
+  const [membershipFilter, setMembershipFilter] = useState('All'); // 'All', 'Paid', 'Free Trial'
+  const [sortOrder, setSortOrder] = useState('newest'); // 'newest', 'oldest', 'name_asc', 'name_desc'
   const [selectedClient, setSelectedClient] = useState(null);
   
   // Clean Data Modal States
@@ -115,7 +117,7 @@ export const LibraryClients = () => {
   });
 
   const filteredClients = useMemo(() => {
-    return clients.filter((c) => {
+    let result = clients.filter((c) => {
       const matchSearch =
         (c.libraryName || '').toLowerCase().includes(search.toLowerCase()) ||
         (c.ownerName || '').toLowerCase().includes(search.toLowerCase()) ||
@@ -123,24 +125,63 @@ export const LibraryClients = () => {
         (c.phone || '').toLowerCase().includes(search.toLowerCase()) ||
         (c.email || '').toLowerCase().includes(search.toLowerCase());
 
-      const matchFilter = statusFilter === 'All' || c.status === statusFilter;
-      return matchSearch && matchFilter;
+      const matchStatus = statusFilter === 'All' || c.status === statusFilter;
+      
+      const isFreeTrial = (c.planName || '').toLowerCase().includes('trial') || (c.planName || '').toLowerCase().includes('free');
+      const matchMembership = membershipFilter === 'All' 
+        ? true 
+        : membershipFilter === 'Free Trial' 
+          ? isFreeTrial 
+          : !isFreeTrial;
+
+      return matchSearch && matchStatus && matchMembership;
     });
-  }, [clients, search, statusFilter]);
+
+    result.sort((a, b) => {
+      const getMs = (val) => {
+        if (!val) return 0;
+        if (typeof val === 'object' && val.seconds !== undefined) return val.seconds * 1000;
+        if (typeof val === 'object' && typeof val.toMillis === 'function') return val.toMillis();
+        return new Date(val).getTime() || 0;
+      };
+
+      if (sortOrder === 'newest') return getMs(b.createdAt) - getMs(a.createdAt);
+      if (sortOrder === 'oldest') return getMs(a.createdAt) - getMs(b.createdAt);
+      if (sortOrder === 'name_asc') return (a.libraryName || '').localeCompare(b.libraryName || '');
+      if (sortOrder === 'name_desc') return (b.libraryName || '').localeCompare(a.libraryName || '');
+      return 0;
+    });
+
+    return result;
+  }, [clients, search, statusFilter, membershipFilter, sortOrder]);
 
   const activeCount = clients.filter((c) => c.status === 'Active').length;
   const expiredCount = clients.filter((c) => c.status === 'Expired').length;
 
-  const formatDate = (dateStr) => {
-    if (!dateStr) return 'No Expiry';
+  const formatDateTime = (val) => {
+    if (!val) return 'No Date';
     try {
-      return new Date(dateStr).toLocaleDateString('en-IN', {
+      let dateObj;
+      if (typeof val === 'object' && val.seconds !== undefined) {
+        dateObj = new Date(val.seconds * 1000);
+      } else if (typeof val === 'object' && typeof val.toDate === 'function') {
+        dateObj = val.toDate();
+      } else {
+        dateObj = new Date(val);
+      }
+      
+      if (isNaN(dateObj.getTime())) return String(val);
+      
+      return dateObj.toLocaleString('en-IN', {
         day: '2-digit',
         month: 'short',
         year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
       });
     } catch {
-      return dateStr;
+      return String(val);
     }
   };
 
@@ -191,33 +232,67 @@ export const LibraryClients = () => {
       </div>
 
       {/* Search & Filter Controls */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
-        <div className="w-full sm:w-80">
-          <SearchBar
-            value={search}
-            onChange={setSearch}
-            placeholder="Search by name, owner, city, phone..."
-          />
+      <div className="flex flex-col gap-4 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="w-full sm:w-80">
+            <SearchBar
+              value={search}
+              onChange={setSearch}
+              placeholder="Search by name, owner, city, phone..."
+            />
+          </div>
+
+          {/* Status Pills */}
+          <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
+            {['All', 'Active', 'Expired'].map((filter) => (
+              <button
+                key={filter}
+                onClick={() => setStatusFilter(filter)}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                  statusFilter === filter
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {filter}
+                {filter === 'All' && ` (${clients.length})`}
+                {filter === 'Active' && ` (${activeCount})`}
+                {filter === 'Expired' && ` (${expiredCount})`}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Filter Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
-          {['All', 'Active', 'Expired'].map((filter) => (
-            <button
-              key={filter}
-              onClick={() => setStatusFilter(filter)}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                statusFilter === filter
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
+        {/* Advanced Filters */}
+        <div className="flex flex-wrap items-center gap-6 pt-4 border-t border-slate-100">
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Membership</span>
+            <div className="flex bg-slate-100 p-1 rounded-lg">
+              {['All', 'Free Trial', 'Paid'].map(type => (
+                <button
+                  key={type}
+                  onClick={() => setMembershipFilter(type)}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition cursor-pointer ${membershipFilter === type ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}
+                >
+                  {type}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Sort By</span>
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value)}
+              className="bg-slate-100 border-none text-xs font-bold text-slate-700 py-1.5 px-3 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
             >
-              {filter}
-              {filter === 'All' && ` (${clients.length})`}
-              {filter === 'Active' && ` (${activeCount})`}
-              {filter === 'Expired' && ` (${expiredCount})`}
-            </button>
-          ))}
+              <option value="newest">Newest Joined</option>
+              <option value="oldest">Oldest Joined</option>
+              <option value="name_asc">Library Name (A-Z)</option>
+              <option value="name_desc">Library Name (Z-A)</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -231,6 +306,7 @@ export const LibraryClients = () => {
                 <th className="px-5 py-3.5">Contact Details</th>
                 <th className="px-5 py-3.5">Location</th>
                 <th className="px-5 py-3.5">Current Plan</th>
+                <th className="px-5 py-3.5">Registered On</th>
                 <th className="px-5 py-3.5">Subscription Status</th>
                 <th className="px-5 py-3.5 text-right">Actions</th>
               </tr>
@@ -286,9 +362,13 @@ export const LibraryClients = () => {
                         </Badge>
                         <p className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
                           <Clock size={11} />
-                          <span>Expires: {formatDate(client.expiryDate)}</span>
+                          <span>Expires: {formatDateTime(client.expiryDate)}</span>
                         </p>
                       </div>
+                    </td>
+
+                    <td className="px-5 py-4 whitespace-nowrap text-xs text-slate-600 font-medium">
+                      {formatDateTime(client.createdAt)}
                     </td>
 
                     <td className="px-5 py-4 whitespace-nowrap">
@@ -332,7 +412,7 @@ export const LibraryClients = () => {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={6} className="p-8">
+                  <td colSpan={7} className="p-8">
                     <EmptyState
                       title="No matching libraries"
                       description="Try changing the search query or status filter."
@@ -409,7 +489,7 @@ export const LibraryClients = () => {
                 <div>
                   <span className="text-slate-500">Expiry Date:</span>
                   <p className="font-bold text-slate-800 text-sm">
-                    {formatDate(selectedClient.expiryDate)}
+                    {formatDateTime(selectedClient.expiryDate)}
                   </p>
                 </div>
                 <div>
