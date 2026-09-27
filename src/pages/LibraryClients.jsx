@@ -384,10 +384,11 @@ export const LibraryClients = () => {
                       <div className="flex items-center justify-end gap-2">
                         <button
                           onClick={(e) => {
+                            e.preventDefault();
                             e.stopPropagation();
                             setSelectedClient(client);
                           }}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition cursor-pointer"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition cursor-pointer z-10 relative"
                           title="Inspect Details"
                         >
                           <Eye size={13} />
@@ -395,12 +396,14 @@ export const LibraryClients = () => {
                         </button>
 
                         <button
-                          onClick={() => {
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
                             setCleanTarget(client);
                             setCleanMode('data_only');
                             setCleanConfirmChecked(false);
                           }}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-bold rounded-lg transition cursor-pointer"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-bold rounded-lg transition cursor-pointer z-10 relative"
                           title="Clean data (reset students, seats, fees)"
                         >
                           <Trash2 size={13} />
