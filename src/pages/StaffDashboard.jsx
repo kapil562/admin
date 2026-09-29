@@ -1055,18 +1055,58 @@ export const StaffDashboard = () => {
             />
           </div>
 
-          {/* Re-Visit & Reminder Section (Direct Type Field) */}
-          <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2">
+          {/* Re-Visit & Reminder Section */}
+          <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2.5">
             <span className="text-[11px] font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1">
               <BellRing size={12} className="text-amber-600" />
-              <span>Re-Visit & Follow-Up (Banda Kab Bulaya / Kya Bola)</span>
+              <span>Re-Visit & Follow-Up (Kab Milna Hai / Kya Kaam Hai)</span>
             </span>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Follow-up Date</label>
+                <input
+                  type="date"
+                  value={form.followUpDate}
+                  onChange={(e) => setForm({ ...form, followUpDate: e.target.value })}
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-900 font-bold outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Time Slot</label>
+                <input
+                  type="time"
+                  value={form.followUpTime}
+                  onChange={(e) => setForm({ ...form, followUpTime: e.target.value })}
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-900 font-bold outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Action Agenda Tags */}
+            <div className="flex items-center gap-1 flex-wrap">
+              {NEXT_ACTION_TAGS.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => setForm({ ...form, nextActionItem: tag })}
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold transition border cursor-pointer ${
+                    form.nextActionItem === tag
+                      ? 'bg-amber-600 text-white border-amber-600'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50'
+                  }`}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+
             <input
               type="text"
-              placeholder="Type karein: e.g. 30 min me aao, Kal dopahar 2 baje, Agle hafte..."
+              placeholder="Re-visit / Reminder Note (e.g. Kal owner milenge, 30 min me aao...)"
               value={form.reminderNote}
               onChange={(e) => setForm({ ...form, reminderNote: e.target.value })}
-              className="w-full px-3 py-2 bg-white border border-amber-300 rounded-lg text-xs font-medium text-slate-900 outline-none focus:border-amber-600 shadow-2xs placeholder:text-slate-400"
+              className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-900 outline-none focus:border-amber-600 font-medium"
             />
           </div>
 

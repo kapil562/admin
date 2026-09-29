@@ -2130,25 +2130,86 @@ export const FieldMarketing = () => {
             </div>
           </div>
 
-          {/* SECTION 6: Re-Visit & Follow-Up Note (Direct Type Field) */}
-          <div className="p-3.5 bg-amber-50/70 border border-amber-200/90 rounded-2xl space-y-2">
+          {/* SECTION 6: Follow-Up & Reminder Scheduler */}
+          <div className="p-3.5 bg-amber-50/70 border border-amber-200/90 rounded-2xl space-y-3">
             <div className="flex items-center justify-between">
               <h4 className="text-[11px] font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
                 <BellRing size={13} className="text-amber-600" />
-                <span>Re-Visit & Follow-Up (Banda Kab Bulaya / Kya Baat Hui)</span>
+                <span>Re-Visit & Follow-Up Reminder (Kab Milna Hai / Kya Kaam Hai)</span>
               </h4>
-              <span className="text-[10px] text-amber-700 font-semibold">
-                (Direct yahan type karein)
-              </span>
             </div>
 
-            <input
-              type="text"
-              placeholder="e.g. 30 min me aao, Kal dopahar 2 baje milo, Agle hafte owner aayenge..."
-              value={form.reminderNote}
-              onChange={(e) => setForm({ ...form, reminderNote: e.target.value })}
-              className="w-full px-3.5 py-2.5 bg-white border border-amber-300 rounded-xl text-xs font-medium text-slate-900 outline-none focus:border-amber-600 shadow-2xs placeholder:text-slate-400"
-            />
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Follow-up Callback Date
+                </label>
+                <input
+                  type="date"
+                  value={form.followUpDate}
+                  onChange={(e) => setForm({ ...form, followUpDate: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-amber-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Exact Time Slot
+                </label>
+                <input
+                  type="time"
+                  value={form.followUpTime}
+                  onChange={(e) => setForm({ ...form, followUpTime: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-amber-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Meeting Mode
+                </label>
+                <select
+                  value={form.followUpType}
+                  onChange={(e) => setForm({ ...form, followUpType: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-amber-600 cursor-pointer"
+                >
+                  <option value="In-Person Re-Visit">🏢 Physical Re-Visit</option>
+                  <option value="Phone Call">📞 Phone Call</option>
+                  <option value="Online Demo">💻 Online Demo / AnyDesk</option>
+                  <option value="WhatsApp Proposal">📱 WhatsApp Proposal</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Next Action Item Tags */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Kya Kaam Karna Hai? (Action Reminder Tag)
+              </label>
+              <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                {NEXT_ACTION_TAGS.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => setForm({ ...form, nextActionItem: tag })}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                      form.nextActionItem === tag
+                        ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="text"
+                placeholder="Re-visit / Reminder Note: e.g. 30 min me aao, Kal dopahar 2 baje milo, Agle hafte owner aayenge..."
+                value={form.reminderNote}
+                onChange={(e) => setForm({ ...form, reminderNote: e.target.value })}
+                className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-amber-600 font-medium"
+              />
+            </div>
           </div>
 
           {/* SECTION 7: Visit Times */}
