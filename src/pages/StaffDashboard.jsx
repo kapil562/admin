@@ -529,9 +529,9 @@ export const StaffDashboard = () => {
                 </div>
                 <button
                   onClick={() => openVisitModal(f)}
-                  className="mt-4 w-full py-2 bg-amber-100 hover:bg-amber-200 text-amber-800 text-xs font-bold rounded-lg transition flex items-center justify-center gap-2"
+                  className="mt-4 w-full py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center justify-center gap-2 cursor-pointer"
                 >
-                  <Edit3 size={14} /> Re-Visit / Update
+                  <MapPin size={14} /> Log Follow-up Visit (Nayi Entry)
                 </button>
               </div>
             ))}

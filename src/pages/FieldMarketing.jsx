@@ -710,24 +710,27 @@ export const FieldMarketing = () => {
   }, [baseVisits, todayStr]);
   const overdueCount = dueFollowUps.filter((v) => v.followUpDate < todayStr).length;
 
-  // Get visit history for a place
+  // Get visit history for a place or business name
   const getPlaceVisitHistory = useCallback(
-    (placeId) => {
-      if (!placeId) return [];
-      return visits.filter((v) => v.placeId === placeId).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    (placeId, businessName) => {
+      const bName = (businessName || '').trim().toLowerCase();
+      if (!placeId && !bName) return [];
+      return visits
+        .filter((v) => (placeId && v.placeId === placeId) || (bName && (v.businessName || '').trim().toLowerCase() === bName))
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     },
     [visits]
   );
 
-  // Visit count per place
+  // Visit count per place or business name (Visit #1, Visit #2, etc.)
   const getVisitNumber = useCallback(
     (visit) => {
-      if (!visit.placeId) return null;
+      const bName = (visit.businessName || '').trim().toLowerCase();
       const placeVisits = visits
-        .filter((v) => v.placeId === visit.placeId)
+        .filter((v) => (visit.placeId && v.placeId === visit.placeId) || (bName && (v.businessName || '').trim().toLowerCase() === bName))
         .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
       const idx = placeVisits.findIndex((v) => v.id === visit.id);
-      return idx >= 0 ? idx + 1 : null;
+      return idx >= 0 ? idx + 1 : 1;
     },
     [visits]
   );
@@ -2409,16 +2412,18 @@ export const FieldMarketing = () => {
             </div>
 
             {/* Visit History for same place */}
-            {selectedVisit.placeId && getPlaceVisitHistory(selectedVisit.placeId).length > 1 && (
+            {getPlaceVisitHistory(selectedVisit.placeId, selectedVisit.businessName).length > 1 && (
               <div>
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">
-                  📜 All Visits to this Library ({getPlaceVisitHistory(selectedVisit.placeId).length})
+                  📜 All Visits to this Library ({getPlaceVisitHistory(selectedVisit.placeId, selectedVisit.businessName).length})
                 </span>
                 <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {getPlaceVisitHistory(selectedVisit.placeId).map((hv) => (
+                  {getPlaceVisitHistory(selectedVisit.placeId, selectedVisit.businessName).map((hv, idx) => (
                     <div key={hv.id} className={`p-2.5 rounded-lg border text-xs ${hv.id === selectedVisit.id ? 'bg-blue-50 border-blue-200' : 'bg-slate-50 border-slate-200'}`}>
                       <div className="flex items-center justify-between">
-                        <span className="font-bold text-slate-800">{hv.staffName} — {formatDate(hv.createdAt)}</span>
+                        <span className="font-bold text-slate-800">
+                          Visit #{getPlaceVisitHistory(selectedVisit.placeId, selectedVisit.businessName).length - idx}: {hv.staffName} — {formatDate(hv.createdAt)}
+                        </span>
                         <Badge variant={getStatusBadgeVariant(hv.status)} size="sm">{hv.status}</Badge>
                       </div>
                       <p className="text-slate-600 mt-1 line-clamp-1">{hv.discussionNotes}</p>
