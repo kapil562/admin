@@ -51,6 +51,7 @@ const VISIT_STATUSES = [
 ];
 
 const RADIUS_OPTIONS = [
+  { value: 0, label: '🌐 Any Distance (No km limit)' },
   { value: 5000, label: '5 km Radius' },
   { value: 10000, label: '10 km Radius' },
   { value: 20000, label: '20 km Radius' },
@@ -67,6 +68,7 @@ const RADIUS_OPTIONS = [
 ];
 
 const LIMIT_OPTIONS = [
+  { value: 0, label: '♾️ All Places (No limit)' },
   { value: 5, label: '5 Places' },
   { value: 10, label: '10 Places' },
   { value: 20, label: '20 Places' },
@@ -818,7 +820,10 @@ export const FieldMarketing = () => {
             {nearbySearchDone && (
               <div>
                 <p className="text-xs font-bold text-slate-500 mb-3">
-                  {nearbyLibraries.length} {activeCategory === 'gym' ? 'gyms' : 'libraries'} found • Sorted by distance (nearest first)
+                  {nearbyLibraries.length} {activeCategory === 'gym' ? 'gyms' : 'libraries'} found
+                  {searchRadius > 0 ? ` within ${searchRadius / 1000} km` : ''}
+                  {searchLimit > 0 ? ` (top ${searchLimit})` : ''}
+                  {' '}• Sorted by distance (nearest first)
                 </p>
                 {nearbyLibraries.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[480px] overflow-y-auto pr-1">

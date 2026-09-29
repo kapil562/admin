@@ -451,7 +451,7 @@ const fallbackPlacesServiceSearch = (lat, lng, radiusMeters) => {
 /**
  * Search libraries by text query with configurable radius and maxResults limit
  */
-export const searchLibrariesByText = async (query, lat, lng, radius = 10000, maxResults = 40) => {
+export const searchLibrariesByText = async (query, lat, lng, radius = null, maxResults = null) => {
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
   // Filter out irrelevant results like toy shops, gift shops
@@ -470,7 +470,10 @@ export const searchLibrariesByText = async (query, lat, lng, radius = 10000, max
       const hasSpecificLocation = query.split(/\s+/).length > 2;
       let allPlaces = [];
       let pageToken = null;
-      const targetPages = Math.ceil(Math.min(maxResults, 100) / 20);
+      // If maxResults specified, calculate pages; otherwise fetch up to 5 pages (100 results)
+      const targetPages = (maxResults && Number(maxResults) > 0)
+        ? Math.ceil(Math.min(Number(maxResults), 100) / 20)
+        : 5;
 
       for (let page = 0; page < targetPages; page++) {
         const body = {
@@ -479,8 +482,10 @@ export const searchLibrariesByText = async (query, lat, lng, radius = 10000, max
         };
 
         if (lat && lng && !hasSpecificLocation) {
-          // Google Places API locationBias radius cannot exceed 50000.0 meters
-          const apiBiasRadius = Math.min(Number(radius) || 10000.0, 50000.0);
+          // If radius specified, use it (clamped to 50km for API); if no radius, bias within 50km
+          const apiBiasRadius = (radius && Number(radius) > 0)
+            ? Math.min(Number(radius), 50000.0)
+            : 50000.0;
           body.locationBias = {
             circle: {
               center: { latitude: lat, longitude: lng },
@@ -508,7 +513,7 @@ export const searchLibrariesByText = async (query, lat, lng, radius = 10000, max
         const batch = data.places || [];
         allPlaces.push(...batch);
 
-        if (!data.nextPageToken || allPlaces.length >= maxResults) {
+        if (!data.nextPageToken || (maxResults && Number(maxResults) > 0 && allPlaces.length >= Number(maxResults))) {
           break;
         }
         pageToken = data.nextPageToken;
@@ -547,15 +552,15 @@ export const searchLibrariesByText = async (query, lat, lng, radius = 10000, max
             };
           });
 
-        // Strictly apply radius filter if coordinates are available
-        if (lat && lng && radius) {
+        // If radius is specified, strictly filter by radius (with 15% boundary tolerance)
+        if (lat && lng && radius && Number(radius) > 0) {
           const maxDistanceWithTolerance = Number(radius) * 1.15;
           formatted = formatted.filter((p) => p.distance == null || p.distance <= maxDistanceWithTolerance);
         }
 
-        // Limit to maxResults requested
-        if (formatted.length > maxResults) {
-          formatted = formatted.slice(0, maxResults);
+        // If maxResults is specified, limit results count; otherwise keep all places found
+        if (maxResults && Number(maxResults) > 0 && formatted.length > Number(maxResults)) {
+          formatted = formatted.slice(0, Number(maxResults));
         }
 
         if (lat && lng) {
