@@ -917,10 +917,13 @@ export const StaffDashboard = () => {
                 />
               </div>
               <div>
-                <label className="block text-[11px] font-bold text-slate-600 mb-0.5">WhatsApp / Alt</label>
+                <div className="flex items-center justify-between mb-0.5">
+                  <label className="block text-[11px] font-bold text-slate-600">Alternative No. / WhatsApp</label>
+                  <span className="text-[9px] text-slate-400 font-semibold">(Optional)</span>
+                </div>
                 <input
                   type="tel"
-                  placeholder="+91 91234 56789"
+                  placeholder="Optional - Jo banda dega wo dalein"
                   value={form.secondaryPhone}
                   onChange={(e) => setForm({ ...form, secondaryPhone: e.target.value })}
                   className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
@@ -1052,80 +1055,18 @@ export const StaffDashboard = () => {
             />
           </div>
 
-          {/* Smart Re-Visit & Reminder Section */}
-          <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2.5">
+          {/* Re-Visit & Reminder Section (Direct Type Field) */}
+          <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2">
             <span className="text-[11px] font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1">
               <BellRing size={12} className="text-amber-600" />
-              <span>Smart Re-Visit & Reminder (30 min me aao ya kal 2 baje)</span>
+              <span>Re-Visit & Follow-Up (Banda Kab Bulaya / Kya Bola)</span>
             </span>
-
-            {/* Quick Timing Chips */}
-            <div className="flex items-center gap-1 flex-wrap">
-              {[
-                { id: '30min', label: '⚡ 30 Mins' },
-                { id: '1hr', label: '⏱️ 1 Hr' },
-                { id: '2hr', label: '⏱️ 2 Hrs' },
-                { id: 'today_evening', label: '🌇 Aaj 5 PM' },
-                { id: 'tomorrow_11am', label: '🌅 Kal 11 AM' },
-                { id: 'tomorrow_2pm', label: '☀️ Kal 2 PM' },
-                { id: '2days', label: '📅 Parso' },
-              ].map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => setQuickFollowUp(c.id)}
-                  className="px-2 py-0.5 rounded text-[11px] font-bold bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs"
-                >
-                  {c.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Date</label>
-                <input
-                  type="date"
-                  value={form.followUpDate}
-                  onChange={(e) => setForm({ ...form, followUpDate: e.target.value })}
-                  className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-900 font-bold outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Time Slot</label>
-                <input
-                  type="time"
-                  value={form.followUpTime}
-                  onChange={(e) => setForm({ ...form, followUpTime: e.target.value })}
-                  className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-900 font-bold outline-none"
-                />
-              </div>
-            </div>
-
-            {/* Action Agenda Tags */}
-            <div className="flex items-center gap-1 flex-wrap">
-              {NEXT_ACTION_TAGS.map((tag) => (
-                <button
-                  key={tag}
-                  type="button"
-                  onClick={() => setForm({ ...form, nextActionItem: tag })}
-                  className={`px-2 py-0.5 rounded text-[10px] font-bold transition border ${
-                    form.nextActionItem === tag
-                      ? 'bg-amber-600 text-white border-amber-600'
-                      : 'bg-white text-slate-700 border-slate-200'
-                  }`}
-                >
-                  {tag}
-                </button>
-              ))}
-            </div>
-
             <input
               type="text"
-              placeholder="Reminder Note (e.g. Kal owner milenge, laptop le jana hai)"
+              placeholder="Type karein: e.g. 30 min me aao, Kal dopahar 2 baje, Agle hafte..."
               value={form.reminderNote}
               onChange={(e) => setForm({ ...form, reminderNote: e.target.value })}
-              className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-900 outline-none"
+              className="w-full px-3 py-2 bg-white border border-amber-300 rounded-lg text-xs font-medium text-slate-900 outline-none focus:border-amber-600 shadow-2xs placeholder:text-slate-400"
             />
           </div>
 

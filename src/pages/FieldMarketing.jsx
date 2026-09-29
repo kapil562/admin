@@ -1895,12 +1895,15 @@ export const FieldMarketing = () => {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Secondary / WhatsApp Number
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Alternative Mobile / WhatsApp
+                  </label>
+                  <span className="text-[10px] text-slate-500 font-semibold">(Optional)</span>
+                </div>
                 <input
                   type="tel"
-                  placeholder="+91 91234 56789"
+                  placeholder="Optional - Jo banda on-site dega wo number yahan dalein"
                   value={form.secondaryPhone}
                   onChange={(e) => setForm({ ...form, secondaryPhone: e.target.value })}
                   className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
@@ -2127,117 +2130,25 @@ export const FieldMarketing = () => {
             </div>
           </div>
 
-          {/* SECTION 6: Smart Re-Visit & Reminder Scheduler (User Requirement!) */}
-          <div className="p-3.5 bg-amber-50/60 border border-amber-200/90 rounded-2xl space-y-3">
+          {/* SECTION 6: Re-Visit & Follow-Up Note (Direct Type Field) */}
+          <div className="p-3.5 bg-amber-50/70 border border-amber-200/90 rounded-2xl space-y-2">
             <div className="flex items-center justify-between">
               <h4 className="text-[11px] font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
                 <BellRing size={13} className="text-amber-600" />
-                <span>Smart Re-Visit & Follow-Up Reminder (Agla Kaam / Kab Milna Hai)</span>
+                <span>Re-Visit & Follow-Up (Banda Kab Bulaya / Kya Baat Hui)</span>
               </h4>
-              <span className="text-[10px] text-amber-700 font-semibold lowercase">
-                (30 min me aao, ya kal milo 2 baje)
+              <span className="text-[10px] text-amber-700 font-semibold">
+                (Direct yahan type karein)
               </span>
             </div>
 
-            {/* Quick Follow-up Timing Chips */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                Quick Re-visit Shortcuts (Banda bola tab milo):
-              </label>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {[
-                  { id: '30min', label: '⚡ In 30 Mins (Abhi busy hain)' },
-                  { id: '1hr', label: '⏱️ In 1 Hour' },
-                  { id: '2hr', label: '⏱️ In 2 Hours' },
-                  { id: 'today_evening', label: '🌇 Aaj Sham 5:00 PM' },
-                  { id: 'tomorrow_11am', label: '🌅 Kal Subah 11:00 AM' },
-                  { id: 'tomorrow_2pm', label: '☀️ Kal Dopahar 2:00 PM' },
-                  { id: '2days', label: '📅 Parso (In 2 Days)' },
-                  { id: '7days', label: '📅 Agle Hafte' },
-                ].map((chip) => (
-                  <button
-                    key={chip.id}
-                    type="button"
-                    onClick={() => setQuickFollowUp(chip.id)}
-                    className="px-2.5 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold transition cursor-pointer shadow-2xs"
-                  >
-                    {chip.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Follow-up Callback Date
-                </label>
-                <input
-                  type="date"
-                  value={form.followUpDate}
-                  onChange={(e) => setForm({ ...form, followUpDate: e.target.value })}
-                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-amber-600"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Exact Time Slot (Kalam/Samay)
-                </label>
-                <input
-                  type="time"
-                  value={form.followUpTime}
-                  onChange={(e) => setForm({ ...form, followUpTime: e.target.value })}
-                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-amber-600"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Meeting Mode
-                </label>
-                <select
-                  value={form.followUpType}
-                  onChange={(e) => setForm({ ...form, followUpType: e.target.value })}
-                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-amber-600 cursor-pointer"
-                >
-                  <option value="In-Person Re-Visit">🏢 Physical Re-Visit</option>
-                  <option value="Phone Call">📞 Phone Call</option>
-                  <option value="Online Demo">💻 Online Demo / AnyDesk</option>
-                  <option value="WhatsApp Proposal">📱 WhatsApp Proposal</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Next Action Item Tags */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">
-                Kya Kaam Karna Hai? (Action Reminder Tag)
-              </label>
-              <div className="flex items-center gap-1.5 flex-wrap mb-2">
-                {NEXT_ACTION_TAGS.map((tag) => (
-                  <button
-                    key={tag}
-                    type="button"
-                    onClick={() => setForm({ ...form, nextActionItem: tag })}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer border ${
-                      form.nextActionItem === tag
-                        ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
-                        : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50'
-                    }`}
-                  >
-                    {tag}
-                  </button>
-                ))}
-              </div>
-              <input
-                type="text"
-                placeholder="Specific Reminder Note: e.g. Bring laptop with offline demo, owner will be at counter, explain 24x7 pricing"
-                value={form.reminderNote}
-                onChange={(e) => setForm({ ...form, reminderNote: e.target.value })}
-                className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-amber-600"
-              />
-            </div>
+            <input
+              type="text"
+              placeholder="e.g. 30 min me aao, Kal dopahar 2 baje milo, Agle hafte owner aayenge..."
+              value={form.reminderNote}
+              onChange={(e) => setForm({ ...form, reminderNote: e.target.value })}
+              className="w-full px-3.5 py-2.5 bg-white border border-amber-300 rounded-xl text-xs font-medium text-slate-900 outline-none focus:border-amber-600 shadow-2xs placeholder:text-slate-400"
+            />
           </div>
 
           {/* SECTION 7: Visit Times */}
