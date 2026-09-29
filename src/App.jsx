@@ -16,6 +16,7 @@ import { PlansManagement } from './pages/PlansManagement';
 import { UserQueries } from './pages/UserQueries';
 import { Reports } from './pages/Reports';
 import { FieldMarketing } from './pages/FieldMarketing';
+import { FieldReports } from './pages/FieldReports';
 import { StaffAttendance } from './pages/StaffAttendance';
 import { StaffManagement } from './pages/StaffManagement';
 import { CouponsManagement } from './pages/CouponsManagement';
@@ -60,6 +61,7 @@ export default function App() {
             >
               <Route path="/" element={<Dashboard />} />
               <Route path="/marketing" element={<FieldMarketing />} />
+              <Route path="/field-reports" element={<FieldReports />} />
               <Route path="/attendance" element={<StaffAttendance />} />
               <Route path="/clients" element={<LibraryClients />} />
               <Route path="/clients/:id" element={<LibraryDetails />} />

@@ -14,7 +14,7 @@ import {
   X,
   ChevronRight,
   Ticket,
-
+  ClipboardList,
   ShieldCheck,
   Navigation,
   CalendarCheck,
@@ -34,6 +34,7 @@ const navigationGroups = [
     title: 'FIELD SALES & MARKETING',
     items: [
       { name: 'Field Visits (GPS)', path: '/marketing', icon: Navigation, module: 'marketing' },
+      { name: 'Field Reports', path: '/field-reports', icon: ClipboardList, module: 'marketing' },
       { name: 'Staff Duty & Hours', path: '/attendance', icon: CalendarCheck, module: 'attendance' },
     ],
   },

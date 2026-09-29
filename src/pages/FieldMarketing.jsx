@@ -744,6 +744,19 @@ export const FieldMarketing = () => {
     }
   };
 
+  const formatDateTime = (dateStr) => {
+    if (!dateStr) return { date: '-', time: '' };
+    try {
+      const d = new Date(dateStr);
+      return {
+        date: d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }),
+        time: d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }),
+      };
+    } catch {
+      return { date: dateStr, time: '' };
+    }
+  };
+
   const getStatusBadgeVariant = (st) => {
     const found = VISIT_STATUSES.find((s) => s.id === st);
     return found ? found.variant : 'neutral';
@@ -1288,6 +1301,7 @@ export const FieldMarketing = () => {
               const staffVisits = visits.filter(
                 (v) => v.staffId === staff.id || v.staffName?.toLowerCase() === staff.name.toLowerCase()
               );
+              const todayVisits = staffVisits.filter((v) => (v.createdAt || '').startsWith(todayStr)).length;
               const staffDemos = staffVisits.filter((v) => v.demoGiven).length;
               const staffDeals = staffVisits.filter((v) => v.status === 'Deal Closed').length;
               const isSelected = selectedStaffFilter === staff.id;
@@ -1307,9 +1321,16 @@ export const FieldMarketing = () => {
                       <p className="text-xs font-bold text-slate-900">{staff.name}</p>
                       <p className="text-[10px] text-slate-500">{staff.roleLabel || 'Marketing Rep'}</p>
                     </div>
-                    <Badge variant={isSelected ? 'info' : 'neutral'} size="sm">
-                      {staffVisits.length} visits
-                    </Badge>
+                    <div className="text-right">
+                      <Badge variant={isSelected ? 'info' : 'neutral'} size="sm">
+                        {staffVisits.length} visits
+                      </Badge>
+                      {todayVisits > 0 && (
+                        <span className="block text-[9px] font-bold text-emerald-700 mt-0.5">
+                          ⚡ {todayVisits} today
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="mt-3 pt-2.5 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
                     <span className="text-slate-600"><strong>{staffDemos}</strong> Demos</span>
@@ -1542,24 +1563,44 @@ export const FieldMarketing = () => {
                         )}
                       </td>
 
-                      {/* Staff & GPS */}
-                      <td className="px-5 py-4 text-xs text-slate-600 whitespace-nowrap">
-                        <div className="font-bold text-slate-800">{visit.staffName}</div>
-                        <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-                          {formatDate(visit.createdAt)}
+                      {/* Staff & Exact Timestamp */}
+                      <td className="px-5 py-4 text-xs whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-blue-100 text-blue-800 font-extrabold text-xs flex items-center justify-center shrink-0 shadow-2xs">
+                            {(visit.staffName || 'S').substring(0, 1).toUpperCase()}
+                          </div>
+                          <div>
+                            <div className="font-bold text-slate-900">{visit.staffName || 'Marketing Rep'}</div>
+                            <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1 mt-0.5">
+                              <span>📅 {formatDateTime(visit.createdAt).date}</span>
+                              {formatDateTime(visit.createdAt).time && (
+                                <span className="text-blue-600 font-bold">• 🕒 {formatDateTime(visit.createdAt).time}</span>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        {visit.location ? (
-                          <a
-                            href={visit.location.mapsUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 mt-1 text-[10px] font-bold text-blue-600 hover:text-blue-800"
-                          >
-                            <MapPin size={10} /> GPS Verified (±{visit.location.accuracy || 10}m)
-                          </a>
-                        ) : (
-                          <span className="text-[10px] text-slate-400 italic block mt-0.5">No GPS</span>
+
+                        {visit.checkInTime && (
+                          <div className="text-[10px] text-slate-500 mt-1 pl-9">
+                            ⏱️ In: <span className="font-semibold text-slate-700">{visit.checkInTime}</span>
+                            {visit.checkOutTime ? <> - Out: <span className="font-semibold text-slate-700">{visit.checkOutTime}</span></> : ''}
+                          </div>
                         )}
+
+                        <div className="pl-9 mt-1">
+                          {visit.location ? (
+                            <a
+                              href={visit.location.mapsUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200"
+                            >
+                              <MapPin size={10} /> GPS Verified (±{visit.location.accuracy || 10}m)
+                            </a>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 italic block">No GPS</span>
+                          )}
+                        </div>
                       </td>
 
                       {/* Status (Inline Changeable) */}
