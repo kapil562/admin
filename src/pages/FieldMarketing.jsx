@@ -51,17 +51,32 @@ const VISIT_STATUSES = [
 ];
 
 const RADIUS_OPTIONS = [
-  { value: 2000, label: '2 km Radius' },
   { value: 5000, label: '5 km Radius' },
   { value: 10000, label: '10 km Radius' },
-  { value: 25000, label: '25 km Radius' },
+  { value: 20000, label: '20 km Radius' },
+  { value: 30000, label: '30 km Radius' },
+  { value: 40000, label: '40 km Radius' },
   { value: 50000, label: '50 km Radius' },
+  { value: 60000, label: '60 km Radius' },
+  { value: 70000, label: '70 km Radius' },
+  { value: 80000, label: '80 km Radius' },
+  { value: 100000, label: '100 km Radius' },
+  { value: 150000, label: '150 km Radius' },
+  { value: 200000, label: '200 km Radius' },
+  { value: 300000, label: '300 km Radius' },
 ];
 
 const LIMIT_OPTIONS = [
+  { value: 5, label: '5 Places' },
+  { value: 10, label: '10 Places' },
   { value: 20, label: '20 Places' },
+  { value: 30, label: '30 Places' },
   { value: 40, label: '40 Places' },
+  { value: 50, label: '50 Places' },
   { value: 60, label: '60 Places' },
+  { value: 70, label: '70 Places' },
+  { value: 80, label: '80 Places' },
+  { value: 90, label: '90 Places' },
   { value: 100, label: '100 Places' },
 ];
 
@@ -93,8 +108,10 @@ export const FieldMarketing = () => {
   const [nearbyLibraries, setNearbyLibraries] = useState([]);
   const [searchingNearby, setSearchingNearby] = useState(false);
   const [nearbySearchDone, setNearbySearchDone] = useState(false);
-  const [searchRadius, setSearchRadius] = useState(10000);
-  const [searchLimit, setSearchLimit] = useState(60);
+  const [searchRadius, setSearchRadius] = useState(20000);
+  const [customRadiusMode, setCustomRadiusMode] = useState(false);
+  const [searchLimit, setSearchLimit] = useState(40);
+  const [customLimitMode, setCustomLimitMode] = useState(false);
   const [manualSearchQuery, setManualSearchQuery] = useState('');
   const [showDiscovery, setShowDiscovery] = useState(true);
 
@@ -676,43 +693,111 @@ export const FieldMarketing = () => {
               />
             </div>
             <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-              <select
-                value={searchRadius}
-                onChange={(e) => {
-                  const r = Number(e.target.value);
-                  setSearchRadius(r);
-                  if (manualSearchQuery.trim()) {
-                    performSearch(myLocation, activeCategory, manualSearchQuery, r, searchLimit);
-                  }
-                }}
-                className="flex-1 sm:flex-none px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
-                title="Search Radius"
-              >
-                {RADIUS_OPTIONS.map((r) => (
-                  <option key={r.value} value={r.value}>
-                    {r.label}
-                  </option>
-                ))}
-              </select>
+              {/* Radius Control: Dropdown with 5-300km OR Type Custom km */}
+              {customRadiusMode ? (
+                <div className="flex items-center bg-slate-50 border border-blue-500 rounded-xl px-2.5 py-1.5 shadow-xs">
+                  <input
+                    type="number"
+                    min="1"
+                    max="300"
+                    value={searchRadius / 1000}
+                    onChange={(e) => {
+                      const val = Math.max(1, Math.min(300, Number(e.target.value) || 1));
+                      setSearchRadius(val * 1000);
+                    }}
+                    onKeyDown={(e) => e.key === 'Enter' && handleManualSearch(e)}
+                    className="w-14 text-xs font-black text-blue-700 outline-none bg-transparent"
+                    placeholder="km"
+                    autoFocus
+                  />
+                  <span className="text-[11px] font-bold text-slate-500 mr-1.5">km</span>
+                  <button
+                    type="button"
+                    onClick={() => setCustomRadiusMode(false)}
+                    className="text-slate-400 hover:text-slate-700 text-xs font-bold px-1 py-0.5 rounded cursor-pointer"
+                    title="Switch to dropdown list"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <select
+                  value={RADIUS_OPTIONS.some((r) => r.value === searchRadius) ? searchRadius : 'custom'}
+                  onChange={(e) => {
+                    if (e.target.value === 'custom') {
+                      setCustomRadiusMode(true);
+                    } else {
+                      const r = Number(e.target.value);
+                      setSearchRadius(r);
+                      if (manualSearchQuery.trim()) {
+                        performSearch(myLocation, activeCategory, manualSearchQuery, r, searchLimit);
+                      }
+                    }
+                  }}
+                  className="flex-1 sm:flex-none px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                  title="Search Radius (5 km to 300 km)"
+                >
+                  {RADIUS_OPTIONS.map((r) => (
+                    <option key={r.value} value={r.value}>
+                      {r.label}
+                    </option>
+                  ))}
+                  <option value="custom">✏️ Type Custom km...</option>
+                </select>
+              )}
 
-              <select
-                value={searchLimit}
-                onChange={(e) => {
-                  const l = Number(e.target.value);
-                  setSearchLimit(l);
-                  if (manualSearchQuery.trim()) {
-                    performSearch(myLocation, activeCategory, manualSearchQuery, searchRadius, l);
-                  }
-                }}
-                className="flex-1 sm:flex-none px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
-                title="Maximum number of results"
-              >
-                {LIMIT_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+              {/* No. of Results Limit Control: Dropdown with 5-100 places OR Type Custom count */}
+              {customLimitMode ? (
+                <div className="flex items-center bg-slate-50 border border-blue-500 rounded-xl px-2.5 py-1.5 shadow-xs">
+                  <input
+                    type="number"
+                    min="1"
+                    max="100"
+                    value={searchLimit}
+                    onChange={(e) => {
+                      const val = Math.max(1, Math.min(100, Number(e.target.value) || 1));
+                      setSearchLimit(val);
+                    }}
+                    onKeyDown={(e) => e.key === 'Enter' && handleManualSearch(e)}
+                    className="w-12 text-xs font-black text-blue-700 outline-none bg-transparent"
+                    placeholder="qty"
+                    autoFocus
+                  />
+                  <span className="text-[11px] font-bold text-slate-500 mr-1.5">places</span>
+                  <button
+                    type="button"
+                    onClick={() => setCustomLimitMode(false)}
+                    className="text-slate-400 hover:text-slate-700 text-xs font-bold px-1 py-0.5 rounded cursor-pointer"
+                    title="Switch to dropdown list"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <select
+                  value={LIMIT_OPTIONS.some((l) => l.value === searchLimit) ? searchLimit : 'custom'}
+                  onChange={(e) => {
+                    if (e.target.value === 'custom') {
+                      setCustomLimitMode(true);
+                    } else {
+                      const l = Number(e.target.value);
+                      setSearchLimit(l);
+                      if (manualSearchQuery.trim()) {
+                        performSearch(myLocation, activeCategory, manualSearchQuery, searchRadius, l);
+                      }
+                    }
+                  }}
+                  className="flex-1 sm:flex-none px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                  title="Maximum number of results (5 to 100)"
+                >
+                  {LIMIT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                  <option value="custom">✏️ Type Custom count...</option>
+                </select>
+              )}
 
               <button
                 onClick={handleManualSearch}

@@ -479,10 +479,12 @@ export const searchLibrariesByText = async (query, lat, lng, radius = 10000, max
         };
 
         if (lat && lng && !hasSpecificLocation) {
+          // Google Places API locationBias radius cannot exceed 50000.0 meters
+          const apiBiasRadius = Math.min(Number(radius) || 10000.0, 50000.0);
           body.locationBias = {
             circle: {
               center: { latitude: lat, longitude: lng },
-              radius: Number(radius) || 10000.0,
+              radius: apiBiasRadius,
             },
           };
         }
