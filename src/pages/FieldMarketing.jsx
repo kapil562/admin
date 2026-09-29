@@ -201,7 +201,7 @@ export const FieldMarketing = () => {
     }
   }, [activeCategory, myLocation, manualSearchQuery]);
 
-  // ── Auto Detect Live Location on Mount (Graceful Fallback to Guna, MP) ──────
+  // ── Auto Detect Live Location on Mount (Location detection only, NO auto-search) ──────
   const loadDeviceGPS = useCallback(async (isManual = false) => {
     try {
       const loc = await getCurrentGPSLocation();
@@ -212,7 +212,6 @@ export const FieldMarketing = () => {
       if (isManual) {
         toast.success(`GPS Connected: ${locName}`);
       }
-      performSearch(loc, activeCategory, manualSearchQuery);
     } catch (err) {
       console.warn('GPS unavailable (HTTP or permission denied), using Guna, MP fallback:', err);
       const fallbackLoc = DEFAULT_GUNA_COORDS;
@@ -221,24 +220,27 @@ export const FieldMarketing = () => {
       if (isManual) {
         toast('GPS not available on insecure HTTP. Using Guna, MP as location.', { icon: '📍' });
       }
-      performSearch(fallbackLoc, activeCategory, manualSearchQuery);
     }
-  }, [activeCategory, manualSearchQuery, performSearch]);
+  }, []);
 
-  // Run ONCE on mount — prevents multiple duplicate error toasts
+  // Run ONCE on mount — detects location only, does not auto-search places
   useEffect(() => {
     loadDeviceGPS(false);
-  }, []);
+  }, [loadDeviceGPS]);
 
   const handleCategorySwitch = (cat) => {
     setActiveCategory(cat);
     setManualSearchQuery('');
-    const loc = myLocation || DEFAULT_GUNA_COORDS;
-    performSearch(loc, cat, '');
+    setNearbyLibraries([]);
+    setNearbySearchDone(false);
   };
 
   const handleManualSearch = (e) => {
     if (e && e.preventDefault) e.preventDefault();
+    if (!manualSearchQuery.trim()) {
+      toast(`Type a ${activeCategory === 'gym' ? 'gym' : 'library'} name or area to search`, { icon: '🔍' });
+      return;
+    }
     const loc = myLocation || DEFAULT_GUNA_COORDS;
     performSearch(loc, activeCategory, manualSearchQuery);
   };
@@ -670,7 +672,9 @@ export const FieldMarketing = () => {
               onChange={(e) => {
                 const r = Number(e.target.value);
                 setSearchRadius(r);
-                performSearch(myLocation, activeCategory, manualSearchQuery);
+                if (manualSearchQuery.trim()) {
+                  performSearch(myLocation, activeCategory, manualSearchQuery);
+                }
               }}
               className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
             >
@@ -790,8 +794,14 @@ export const FieldMarketing = () => {
             )}
 
             {!nearbySearchDone && !searchingNearby && (
-              <div className="text-center py-6 text-xs text-slate-400">
-                Click "Search Libraries" to discover nearby study libraries, reading rooms, and study points.
+              <div className="text-center py-8 text-xs text-slate-400 flex flex-col items-center justify-center gap-1.5">
+                <Search size={22} className="text-slate-300 mb-1" />
+                <p className="font-semibold text-slate-600">
+                  Type a {activeCategory === 'gym' ? 'gym' : 'library'} name or city above and click "Find Nearest"
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  Search box me type karne ke baad hi nearest results dikhenge.
+                </p>
               </div>
             )}
           </div>
