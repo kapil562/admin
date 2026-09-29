@@ -39,6 +39,16 @@ import {
   ArrowRight,
   Loader2,
   X,
+  Camera,
+  Image as ImageIcon,
+  Flame,
+  Zap,
+  Shield,
+  FileCheck,
+  Layers,
+  HelpCircle,
+  BellRing,
+  Sparkles,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -49,6 +59,126 @@ const VISIT_STATUSES = [
   { id: 'Deal Closed', label: '🎉 Deal Closed / Subscribed', variant: 'success' },
   { id: 'Not Interested', label: 'Not Interested', variant: 'danger' },
 ];
+
+const PERSON_MET_OPTIONS = [
+  'Owner / Director',
+  'Manager / In-Charge',
+  'Receptionist / Staff',
+  'Partner / Co-Founder',
+  'Other',
+];
+
+const SEAT_CAPACITY_OPTIONS = [
+  '< 50 Seats',
+  '50 - 100 Seats',
+  '100 - 150 Seats',
+  '150 - 250 Seats',
+  '250+ Seats',
+];
+
+const CURRENT_SOFTWARE_OPTIONS = [
+  { id: 'Manual Register', label: '📒 Manual Register / Diary', desc: 'No software yet (High conversion!)' },
+  { id: 'Excel / Spreadsheets', label: '📊 Excel / Google Sheets', desc: 'Basic computer records' },
+  { id: 'Competitor Software', label: '💻 Competitor Software', desc: 'Active other subscription' },
+  { id: 'New Library', label: '🆕 New Library Setup', desc: 'Opening soon' },
+];
+
+const LEAD_PRIORITY_OPTIONS = [
+  { id: 'Hot', label: '🔥 Hot (Closing in 1-3 Days)', color: 'text-rose-600 bg-rose-50 border-rose-200' },
+  { id: 'Warm', label: '⚡ Warm (Interested, Needs Follow-up)', color: 'text-amber-600 bg-amber-50 border-amber-200' },
+  { id: 'Cold', label: '❄️ Cold (Long Term / Competitor Locked)', color: 'text-blue-600 bg-blue-50 border-blue-200' },
+];
+
+const NEXT_ACTION_TAGS = [
+  '💻 Give Full Software Demo',
+  '🤝 Meet Owner Directly (Kal Owner Milenge)',
+  '💰 Price Negotiation / Final Discount',
+  '📝 Collect Payment / Cheque',
+  '🔄 Excel / Data Migration Assistance',
+  '📞 Call back to confirm decision',
+  '📱 Send WhatsApp Proposal & Videos',
+];
+
+const COMPETITOR_SUGGESTIONS = ['Librex', 'ReaderDesk', 'LibraryDesk', 'StudyHub', 'Custom App'];
+
+/**
+ * Client-side lightweight image compression for instant Firestore storage (~50-80KB)
+ */
+const compressImage = (file, maxWidth = 1000, maxHeight = 1000, quality = 0.7) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        if (width > maxWidth || height > maxHeight) {
+          if (width > height) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          } else {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(dataUrl);
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+};
+
+const initialFormState = {
+  clientType: 'Library',
+  businessName: '',
+  ownerName: '',
+  phone: '',
+  secondaryPhone: '',
+  state: '',
+  city: '',
+  address: '',
+  discussionNotes: '',
+  demoGiven: false,
+  status: 'Interested',
+  leadPriority: 'Warm',
+  // Person Met & Profile
+  personMet: 'Owner / Director',
+  contactPersonName: '',
+  seatCapacity: '',
+  // Current System & Competitor
+  currentSoftwareType: 'Manual Register',
+  competitorName: '',
+  competitorExpiryDate: '',
+  competitorDuration: '',
+  switchingReason: '',
+  // Follow-up & Reminders
+  followUpDate: '',
+  followUpTime: '',
+  followUpType: 'In-Person Re-Visit',
+  nextActionItem: '',
+  reminderNote: '',
+  // Photo
+  photoUrl: null,
+  // Times & Location
+  checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+  checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+  durationMinutes: 20,
+  placeId: null,
+  placeName: '',
+  placeAddress: '',
+  placeRating: null,
+  placeLat: null,
+  placeLng: null,
+};
 
 const RADIUS_OPTIONS = [
   { value: '', label: '-- Select Radius (km) --' },
@@ -101,6 +231,7 @@ export const FieldMarketing = () => {
   const [editingVisit, setEditingVisit] = useState(null);
   const [selectedVisit, setSelectedVisit] = useState(null);
   const [statusDropdownId, setStatusDropdownId] = useState(null);
+  const [previewPhotoUrl, setPreviewPhotoUrl] = useState(null);
 
   // Nearby discovery state
   const [myLocation, setMyLocation] = useState(null);
@@ -123,28 +254,7 @@ export const FieldMarketing = () => {
   const [gpsData, setGpsData] = useState(null);
 
   // Form state
-  const [form, setForm] = useState({
-    clientType: 'Library',
-    businessName: '',
-    ownerName: '',
-    phone: '',
-    state: '',
-    city: '',
-    address: '',
-    discussionNotes: '',
-    demoGiven: false,
-    status: 'Interested',
-    followUpDate: '',
-    checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-    checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-    durationMinutes: 20,
-    placeId: null,
-    placeName: '',
-    placeAddress: '',
-    placeRating: null,
-    placeLat: null,
-    placeLng: null,
-  });
+  const [form, setForm] = useState(initialFormState);
 
   // Fetch staff users (admin only)
   const { data: staffList = [] } = useQuery({
@@ -288,67 +398,121 @@ export const FieldMarketing = () => {
 
   // ── Form helpers ───────────────────────────────────────────────────────────
   const resetForm = () => {
-    setForm({
-      clientType: 'Library',
-      businessName: '',
-      ownerName: '',
-      phone: '',
-      state: '',
-      city: '',
-      address: '',
-      discussionNotes: '',
-      demoGiven: false,
-      status: 'Interested',
-      followUpDate: '',
-      checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      durationMinutes: 20,
-      placeId: null,
-      placeName: '',
-      placeAddress: '',
-      placeRating: null,
-      placeLat: null,
-      placeLng: null,
-    });
+    setForm(initialFormState);
     setGpsData(null);
+  };
+
+  const handlePhotoCapture = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      toast.loading('Processing & compressing photo...', { id: 'photo-upload' });
+      const compressed = await compressImage(file);
+      setForm((prev) => ({ ...prev, photoUrl: compressed }));
+      toast.success('Library photo attached! 📷', { id: 'photo-upload' });
+    } catch (err) {
+      console.error('Failed to compress image:', err);
+      toast.error('Failed to process image. Please try again.', { id: 'photo-upload' });
+    }
+  };
+
+  const setQuickFollowUp = (type) => {
+    const now = new Date();
+    let targetDate = new Date();
+    let timeStr = '14:00';
+
+    if (type === '30min') {
+      targetDate = new Date(now.getTime() + 30 * 60 * 1000);
+      const hrs = String(targetDate.getHours()).padStart(2, '0');
+      const mins = String(targetDate.getMinutes()).padStart(2, '0');
+      timeStr = `${hrs}:${mins}`;
+    } else if (type === '1hr') {
+      targetDate = new Date(now.getTime() + 60 * 60 * 1000);
+      const hrs = String(targetDate.getHours()).padStart(2, '0');
+      const mins = String(targetDate.getMinutes()).padStart(2, '0');
+      timeStr = `${hrs}:${mins}`;
+    } else if (type === '2hr') {
+      targetDate = new Date(now.getTime() + 120 * 60 * 1000);
+      const hrs = String(targetDate.getHours()).padStart(2, '0');
+      const mins = String(targetDate.getMinutes()).padStart(2, '0');
+      timeStr = `${hrs}:${mins}`;
+    } else if (type === 'today_evening') {
+      timeStr = '17:00';
+    } else if (type === 'tomorrow_11am') {
+      targetDate.setDate(targetDate.getDate() + 1);
+      timeStr = '11:00';
+    } else if (type === 'tomorrow_2pm') {
+      targetDate.setDate(targetDate.getDate() + 1);
+      timeStr = '14:00';
+    } else if (type === '2days') {
+      targetDate.setDate(targetDate.getDate() + 2);
+      timeStr = '12:00';
+    } else if (type === '7days') {
+      targetDate.setDate(targetDate.getDate() + 7);
+      timeStr = '12:00';
+    }
+
+    const dateStr = targetDate.toISOString().split('T')[0];
+    setForm((prev) => ({
+      ...prev,
+      status: 'Follow Up',
+      followUpDate: dateStr,
+      followUpTime: timeStr,
+    }));
+    toast.success(`Follow-up set: ${dateStr} at ${timeStr}`);
+  };
+
+  const setCompetitorPreset = (months, label) => {
+    const target = new Date();
+    target.setMonth(target.getMonth() + months);
+    const expiryStr = target.toISOString().split('T')[0];
+
+    // Set follow-up reminder 10 days before expiry!
+    const reminderDate = new Date(target);
+    reminderDate.setDate(reminderDate.getDate() - 10);
+    const reminderStr = reminderDate.toISOString().split('T')[0];
+
+    setForm((prev) => ({
+      ...prev,
+      currentSoftwareType: 'Competitor Software',
+      competitorDuration: label,
+      competitorExpiryDate: expiryStr,
+      followUpDate: reminderStr,
+      followUpTime: '11:00',
+      status: 'Follow Up',
+      nextActionItem: `Competitor (${prev.competitorName || 'Software'}) expiring soon - Offer Migration & Special Price`,
+      reminderNote: `Current software expires on ${expiryStr}. Follow up 10 days before to close deal!`,
+    }));
+    toast.success(`Competitor expiry set to ${expiryStr}. Follow-up reminder set 10 days before!`);
   };
 
   const openLogVisitFromPlace = async (place) => {
     setEditingVisit(null);
-
-    // 1. Immediately parse city, state, and area from place.address
     const parsed = parseAddressDetails(place.address || '');
 
     setForm({
+      ...initialFormState,
       clientType: activeCategory === 'gym' ? 'Gym' : 'Library',
       businessName: place.name || '',
-      ownerName: '',
       phone: place.phone || '',
       state: parsed.state || '',
       city: parsed.city || '',
       address: parsed.area || place.address || '',
-      discussionNotes: '',
-      demoGiven: false,
-      status: 'Interested',
-      followUpDate: '',
-      checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      durationMinutes: 20,
       placeId: place.placeId,
       placeName: place.name || '',
       placeAddress: place.address || '',
       placeRating: place.rating,
       placeLat: place.lat,
       placeLng: place.lng,
+      checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+      checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
     });
     setShowModal(true);
 
-    // 2. Auto GPS lock
     getCurrentGPSLocation().then((loc) => {
       setGpsData(loc);
     }).catch(() => {});
 
-    // 3. Fetch phone number and detailed components from Google Places
     if (place.placeId) {
       getPlaceDetails(place.placeId)
         .then((details) => {
@@ -371,26 +535,33 @@ export const FieldMarketing = () => {
   const openReVisit = (visit) => {
     setEditingVisit(null);
     setForm({
+      ...initialFormState,
       clientType: visit.clientType || 'Library',
       businessName: visit.businessName || '',
       ownerName: visit.ownerName || '',
       phone: visit.phone || '',
+      secondaryPhone: visit.secondaryPhone || '',
       state: visit.state || '',
       city: visit.city || '',
       address: visit.address || '',
-      discussionNotes: '',
-      demoGiven: false,
+      personMet: visit.personMet || 'Owner / Director',
+      contactPersonName: visit.contactPersonName || '',
+      seatCapacity: visit.seatCapacity || '',
+      currentSoftwareType: visit.currentSoftwareType || 'Manual Register',
+      competitorName: visit.competitorName || '',
+      competitorExpiryDate: visit.competitorExpiryDate || '',
+      competitorDuration: visit.competitorDuration || '',
+      switchingReason: visit.switchingReason || '',
+      leadPriority: visit.leadPriority || 'Warm',
       status: 'Follow Up',
-      followUpDate: '',
-      checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      durationMinutes: 20,
       placeId: visit.placeId || null,
       placeName: visit.placeName || visit.businessName || '',
       placeAddress: visit.placeAddress || visit.address || '',
       placeRating: visit.placeRating || null,
       placeLat: visit.placeLat || null,
       placeLng: visit.placeLng || null,
+      checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+      checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
     });
     setShowModal(true);
     getCurrentGPSLocation().then((loc) => {
@@ -406,13 +577,28 @@ export const FieldMarketing = () => {
       businessName: visit.businessName || '',
       ownerName: visit.ownerName || '',
       phone: visit.phone || '',
+      secondaryPhone: visit.secondaryPhone || '',
       state: visit.state || '',
       city: visit.city || '',
       address: visit.address || '',
       discussionNotes: visit.discussionNotes || '',
       demoGiven: visit.demoGiven || false,
       status: visit.status || 'Interested',
+      leadPriority: visit.leadPriority || 'Warm',
+      personMet: visit.personMet || 'Owner / Director',
+      contactPersonName: visit.contactPersonName || '',
+      seatCapacity: visit.seatCapacity || '',
+      currentSoftwareType: visit.currentSoftwareType || 'Manual Register',
+      competitorName: visit.competitorName || '',
+      competitorExpiryDate: visit.competitorExpiryDate || '',
+      competitorDuration: visit.competitorDuration || '',
+      switchingReason: visit.switchingReason || '',
       followUpDate: visit.followUpDate || '',
+      followUpTime: visit.followUpTime || '',
+      followUpType: visit.followUpType || 'In-Person Re-Visit',
+      nextActionItem: visit.nextActionItem || '',
+      reminderNote: visit.reminderNote || '',
+      photoUrl: visit.photoUrl || null,
       checkInTime: visit.checkInTime || '',
       checkOutTime: visit.checkOutTime || '',
       durationMinutes: visit.durationMinutes || 20,
@@ -1206,11 +1392,11 @@ export const FieldMarketing = () => {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50/80 border-b border-slate-100 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                <th className="px-5 py-3.5">Client & Target</th>
-                <th className="px-5 py-3.5">Owner & Contact</th>
-                <th className="px-5 py-3.5">Staff & Date</th>
-                <th className="px-5 py-3.5">Discussion & Demo</th>
-                <th className="px-5 py-3.5">GPS Verification</th>
+                <th className="px-5 py-3.5">Client & Scale</th>
+                <th className="px-5 py-3.5">Contact & Met</th>
+                <th className="px-5 py-3.5">Current Software</th>
+                <th className="px-5 py-3.5">Discussion & Next Action</th>
+                <th className="px-5 py-3.5">Staff & GPS</th>
                 <th className="px-5 py-3.5">Status</th>
                 <th className="px-5 py-3.5 text-right">Actions</th>
               </tr>
@@ -1221,29 +1407,63 @@ export const FieldMarketing = () => {
                   const visitNum = getVisitNumber(visit);
                   return (
                     <tr key={visit.id} className="hover:bg-slate-50/70 transition-colors">
-                      {/* Business Name */}
+                      {/* Business Name & Scale */}
                       <td className="px-5 py-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center font-bold text-xs shrink-0">
-                            <Building2 size={16} />
-                          </div>
+                          {visit.photoUrl ? (
+                            <div
+                              onClick={() => setPreviewPhotoUrl(visit.photoUrl)}
+                              className="relative w-10 h-10 rounded-xl overflow-hidden border border-slate-200 cursor-pointer shrink-0 group shadow-2xs"
+                              title="Click to view library photo"
+                            >
+                              <img src={visit.photoUrl} alt="" className="w-full h-full object-cover group-hover:scale-110 transition duration-200" />
+                              <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
+                                <Camera size={14} className="text-white" />
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center font-bold text-xs shrink-0">
+                              <Building2 size={16} />
+                            </div>
+                          )}
+
                           <div className="min-w-0">
-                            <p className="font-bold text-slate-900 truncate max-w-xs">
-                              {visit.businessName}
-                            </p>
-                            <span className="text-[11px] text-slate-400 font-semibold block">
-                              {visit.clientType} • {visit.city || 'City'}
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <p className="font-bold text-slate-900 truncate max-w-xs">
+                                {visit.businessName}
+                              </p>
+                              {visit.leadPriority === 'Hot' && (
+                                <span className="text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-200 px-1.5 py-0.2 rounded-md">
+                                  🔥 Hot
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[11px] text-slate-400 font-semibold flex items-center gap-1.5 mt-0.5">
+                              <span>{visit.clientType} • {visit.city || 'City'}</span>
+                              {visit.seatCapacity && (
+                                <span className="text-[10px] text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded font-bold">
+                                  🪑 {visit.seatCapacity}
+                                </span>
+                              )}
                               {visitNum && visitNum > 1 && (
-                                <span className="ml-1 text-blue-600 font-bold">• Visit #{visitNum}</span>
+                                <span className="text-blue-600 font-bold">• #{visitNum}</span>
                               )}
                             </span>
                           </div>
                         </div>
                       </td>
 
-                      {/* Owner & Contact */}
+                      {/* Owner & Person Met */}
                       <td className="px-5 py-4 text-xs text-slate-600">
-                        <div className="font-semibold text-slate-800">{visit.ownerName}</div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-slate-800">{visit.ownerName || 'Owner'}</span>
+                          {visit.personMet && (
+                            <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
+                              {visit.personMet.split(' ')[0]}
+                            </span>
+                          )}
+                        </div>
+
                         {visit.phone && (
                           <div className="flex items-center gap-2 mt-1">
                             <a href={`tel:${visit.phone}`} className="text-blue-600 hover:text-blue-800" title="Call">
@@ -1261,54 +1481,81 @@ export const FieldMarketing = () => {
                             <span className="text-slate-500 text-[11px]">{visit.phone}</span>
                           </div>
                         )}
+                        {visit.secondaryPhone && (
+                          <span className="text-[10px] text-slate-400 block mt-0.5">
+                            Alt: {visit.secondaryPhone}
+                          </span>
+                        )}
                       </td>
 
-                      {/* Staff & Date */}
-                      <td className="px-5 py-4 text-xs text-slate-600 whitespace-nowrap">
-                        <div className="font-bold text-slate-800">{visit.staffName}</div>
-                        <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-                          {formatDate(visit.createdAt)}
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          {visit.checkInTime} - {visit.checkOutTime}
-                        </div>
+                      {/* Current Software & Competitor */}
+                      <td className="px-5 py-4 text-xs whitespace-nowrap">
+                        {visit.currentSoftwareType === 'Competitor Software' ? (
+                          <div className="space-y-0.5">
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-lg">
+                              💻 {visit.competitorName || 'Competitor App'}
+                            </span>
+                            {(visit.competitorExpiryDate || visit.competitorDuration) && (
+                              <p className="text-[10px] text-amber-700 font-semibold">
+                                Exp: {visit.competitorExpiryDate || visit.competitorDuration}
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-500 text-[11px] font-medium">
+                            {visit.currentSoftwareType || '📒 Manual Register'}
+                          </span>
+                        )}
                       </td>
 
-                      {/* Discussion & Demo */}
+                      {/* Discussion, Follow-up & Reminder */}
                       <td className="px-5 py-4 max-w-xs text-xs">
                         <p className="text-slate-700 line-clamp-2 leading-relaxed">
                           {visit.discussionNotes || 'No notes.'}
                         </p>
+
                         {visit.demoGiven && (
                           <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">
                             <Check size={10} /> Demo Given
                           </span>
                         )}
+
                         {visit.followUpDate && (
-                          <span className="block text-[10px] text-amber-600 font-semibold mt-0.5">
-                            Follow-up: {visit.followUpDate}
-                          </span>
+                          <div className="mt-1.5 p-1.5 bg-amber-50/90 rounded-lg border border-amber-200/80">
+                            <p className="text-[10px] font-bold text-amber-900">
+                              ⏰ {visit.followUpDate} {visit.followUpTime ? `@ ${visit.followUpTime}` : ''}
+                            </p>
+                            {visit.nextActionItem && (
+                              <p className="text-[10px] text-amber-800 font-semibold line-clamp-1">
+                                🎯 {visit.nextActionItem}
+                              </p>
+                            )}
+                            {visit.reminderNote && (
+                              <p className="text-[9px] text-slate-600 italic line-clamp-1">
+                                📝 {visit.reminderNote}
+                              </p>
+                            )}
+                          </div>
                         )}
                       </td>
 
-                      {/* GPS */}
-                      <td className="px-5 py-4 whitespace-nowrap text-xs">
+                      {/* Staff & GPS */}
+                      <td className="px-5 py-4 text-xs text-slate-600 whitespace-nowrap">
+                        <div className="font-bold text-slate-800">{visit.staffName}</div>
+                        <div className="text-[11px] text-slate-400 font-medium mt-0.5">
+                          {formatDate(visit.createdAt)}
+                        </div>
                         {visit.location ? (
-                          <div className="space-y-1">
-                            <a
-                              href={visit.location.mapsUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 font-bold hover:bg-blue-100 transition"
-                            >
-                              <MapPin size={12} className="text-blue-600" />
-                              <span>Google Map</span>
-                              <ExternalLink size={10} />
-                            </a>
-                            <p className="text-[10px] text-slate-400 font-medium">±{visit.location.accuracy || 10}m</p>
-                          </div>
+                          <a
+                            href={visit.location.mapsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 mt-1 text-[10px] font-bold text-blue-600 hover:text-blue-800"
+                          >
+                            <MapPin size={10} /> GPS Verified (±{visit.location.accuracy || 10}m)
+                          </a>
                         ) : (
-                          <span className="text-[11px] text-slate-400 italic">No GPS</span>
+                          <span className="text-[10px] text-slate-400 italic block mt-0.5">No GPS</span>
                         )}
                       </td>
 
@@ -1415,212 +1662,608 @@ export const FieldMarketing = () => {
       <Modal
         isOpen={showModal}
         onClose={() => { setShowModal(false); setEditingVisit(null); }}
-        title={editingVisit ? 'Edit Visit Record' : 'Log On-Site Library Visit'}
+        title={editingVisit ? 'Edit Field Visit Record' : 'Log On-Site Field Visit'}
         subtitle={
           editingVisit
             ? `Editing visit to ${editingVisit.businessName}`
             : form.placeName
             ? `📍 ${form.placeName} — ${form.placeAddress}`
-            : 'Capture GPS location, library details, and meeting notes'
+            : 'Capture on-ground photo proof, client details, competitor status & follow-up'
         }
-        maxWidth="max-w-2xl"
+        maxWidth="max-w-3xl"
       >
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* GPS Capture Banner */}
-          <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div
-                className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                  gpsData ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 'bg-blue-50 text-blue-600'
+          {/* SECTION 1: Dual Verification - GPS & Live Camera Photo */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* GPS Verification Card */}
+            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div
+                  className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                    gpsData ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 'bg-blue-50 text-blue-600'
+                  }`}
+                >
+                  <Crosshair size={18} className={capturingGps ? 'animate-spin' : ''} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-slate-900 truncate">Live GPS Location</p>
+                  <p className="text-[10px] text-slate-500 truncate">
+                    {gpsData
+                      ? `Locked: ${gpsData.latitude.toFixed(4)}, ${gpsData.longitude.toFixed(4)} (±${gpsData.accuracy}m)`
+                      : 'Auto-detecting...'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={capturingGps}
+                onClick={handleCaptureGPS}
+                className={`px-3 py-1.5 rounded-xl text-[11px] font-bold transition flex items-center gap-1 cursor-pointer shrink-0 ${
+                  gpsData
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
                 }`}
               >
-                <Crosshair size={20} className={capturingGps ? 'animate-spin' : ''} />
+                <MapPin size={12} />
+                <span>{capturingGps ? 'Locking...' : gpsData ? 'Re-lock' : 'Get GPS'}</span>
+              </button>
+            </div>
+
+            {/* Photo Proof Card */}
+            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2.5 min-w-0">
+                {form.photoUrl ? (
+                  <div
+                    onClick={() => setPreviewPhotoUrl(form.photoUrl)}
+                    className="relative w-9 h-9 rounded-xl overflow-hidden border border-emerald-400 cursor-pointer shrink-0 group"
+                    title="Click to view full photo"
+                  >
+                    <img src={form.photoUrl} alt="Library Proof" className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
+                      <Camera size={12} className="text-white" />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-200 flex items-center justify-center shrink-0">
+                    <Camera size={18} />
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-slate-900 flex items-center gap-1">
+                    <span>Library Board / Photo</span>
+                    {form.photoUrl && <span className="text-[10px] text-emerald-600 font-bold">✓ Attached</span>}
+                  </p>
+                  <p className="text-[10px] text-slate-500 truncate">
+                    {form.photoUrl ? 'Click thumbnail to inspect' : 'Live camera or upload proof'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <label className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[11px] font-bold cursor-pointer transition flex items-center gap-1 shadow-xs">
+                  <Camera size={12} />
+                  <span>{form.photoUrl ? 'Retake' : 'Take Photo'}</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handlePhotoCapture}
+                    className="hidden"
+                  />
+                </label>
+                {form.photoUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({ ...prev, photoUrl: null }))}
+                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer transition"
+                    title="Remove Photo"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* SECTION 2: Basic Library Details & Capacity */}
+          <div className="p-3.5 bg-slate-50/70 border border-slate-200/80 rounded-2xl space-y-3">
+            <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+              <Building2 size={13} className="text-blue-600" />
+              <span>Library Identity & Scale</span>
+            </h4>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Library / Center Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Saraswati Study Library, Apex Point"
+                  value={form.businessName}
+                  onChange={(e) => setForm({ ...form, businessName: e.target.value })}
+                  className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-blue-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Seat Capacity (Total Seats)
+                </label>
+                <select
+                  value={form.seatCapacity}
+                  onChange={(e) => setForm({ ...form, seatCapacity: e.target.value })}
+                  className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-blue-600 cursor-pointer"
+                >
+                  <option value="">-- Select Total Seats --</option>
+                  {SEAT_CAPACITY_OPTIONS.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">State (राज्य) *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Madhya Pradesh"
+                  value={form.state}
+                  onChange={(e) => setForm({ ...form, state: e.target.value })}
+                  className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                />
               </div>
               <div>
-                <p className="text-xs font-bold text-slate-900">Live GPS Pinpoint</p>
-                <p className="text-[11px] text-slate-500">
-                  {gpsData
-                    ? `GPS Locked: ${gpsData.latitude.toFixed(5)}, ${gpsData.longitude.toFixed(5)} (±${gpsData.accuracy}m)`
-                    : 'Click to capture or wait for auto-lock'}
-                </p>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">City (शहर) *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Guna"
+                  value={form.city}
+                  onChange={(e) => setForm({ ...form, city: e.target.value })}
+                  className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Area / Location</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Mahaveerpura near Station"
+                  value={form.address}
+                  onChange={(e) => setForm({ ...form, address: e.target.value })}
+                  className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                />
               </div>
             </div>
-            <button
-              type="button"
-              disabled={capturingGps}
-              onClick={handleCaptureGPS}
-              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shrink-0 ${
-                gpsData
-                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
-                  : 'bg-blue-600 hover:bg-blue-700 text-white shadow-xs'
-              }`}
-            >
-              <MapPin size={14} />
-              <span>{capturingGps ? 'Locking...' : gpsData ? 'Re-Capture' : 'Capture GPS'}</span>
-            </button>
           </div>
 
-          {/* Business Name & Owner */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* SECTION 3: Person Met & Contact Details */}
+          <div className="p-3.5 bg-slate-50/70 border border-slate-200/80 rounded-2xl space-y-3">
+            <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+              <Users size={13} className="text-emerald-600" />
+              <span>Person Met & Direct Contacts</span>
+            </h4>
+
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Library Name *</label>
-              <input
-                type="text"
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">Kisse Mulakat Hui? (Person Met)</label>
+              <div className="flex flex-wrap gap-2">
+                {PERSON_MET_OPTIONS.map((pm) => (
+                  <button
+                    key={pm}
+                    type="button"
+                    onClick={() => setForm({ ...form, personMet: pm })}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer border ${
+                      form.personMet === pm
+                        ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-emerald-300'
+                    }`}
+                  >
+                    {pm}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Owner / Decision Maker Name
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Rakesh Sharma"
+                  value={form.ownerName}
+                  onChange={(e) => setForm({ ...form, ownerName: e.target.value })}
+                  className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Primary Mobile (Calling)
+                </label>
+                <input
+                  type="tel"
+                  placeholder="+91 98765 43210"
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Secondary / WhatsApp Number
+                </label>
+                <input
+                  type="tel"
+                  placeholder="+91 91234 56789"
+                  value={form.secondaryPhone}
+                  onChange={(e) => setForm({ ...form, secondaryPhone: e.target.value })}
+                  className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                />
+              </div>
+            </div>
+
+            {form.personMet !== 'Owner / Director' && (
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Met Person Name & Note (Agar Owner nahi mile)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Manager Suresh Kumar (Owner will come at 2:00 PM)"
+                  value={form.contactPersonName}
+                  onChange={(e) => setForm({ ...form, contactPersonName: e.target.value })}
+                  className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* SECTION 4: Current Software & Competitor Tracking (User Requirement!) */}
+          <div className="p-3.5 bg-indigo-50/50 border border-indigo-200/80 rounded-2xl space-y-3">
+            <h4 className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <Layers size={13} className="text-indigo-600" />
+                <span>Current Management & Competitor Subscription Status</span>
+              </span>
+              <span className="text-[10px] text-indigo-600 font-semibold lowercase">
+                (dusra software kab khatam hoga?)
+              </span>
+            </h4>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                Abhi Library Kaise Manage Ho Rahi Hai?
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {CURRENT_SOFTWARE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setForm({ ...form, currentSoftwareType: opt.id })}
+                    className={`p-2 rounded-xl text-left transition cursor-pointer border ${
+                      form.currentSoftwareType === opt.id
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300'
+                    }`}
+                  >
+                    <p className="text-xs font-bold truncate">{opt.label}</p>
+                    <p className={`text-[10px] truncate mt-0.5 ${form.currentSoftwareType === opt.id ? 'text-indigo-100' : 'text-slate-400'}`}>
+                      {opt.desc}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {form.currentSoftwareType === 'Competitor Software' && (
+              <div className="p-3 bg-white border border-indigo-200 rounded-xl space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Competitor Software Name
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Librex, ReaderDesk, Custom..."
+                      value={form.competitorName}
+                      onChange={(e) => setForm({ ...form, competitorName: e.target.value })}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 font-bold outline-none focus:border-indigo-600"
+                    />
+                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                      <span className="text-[10px] text-slate-400">Suggestions:</span>
+                      {COMPETITOR_SUGGESTIONS.map((sug) => (
+                        <button
+                          key={sug}
+                          type="button"
+                          onClick={() => setForm({ ...form, competitorName: sug })}
+                          className="text-[10px] font-semibold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded hover:bg-indigo-100 cursor-pointer"
+                        >
+                          {sug}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Current Subscription Expiry Date
+                    </label>
+                    <input
+                      type="date"
+                      value={form.competitorExpiryDate}
+                      onChange={(e) => setForm({ ...form, competitorExpiryDate: e.target.value })}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 font-bold outline-none focus:border-indigo-600"
+                    />
+                  </div>
+                </div>
+
+                {/* Quick Expiry Duration Chips */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Kab Khatam Hoga? (Quick Duration Preset)
+                  </label>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {[
+                      { label: '⚡ 15 Din Baad', months: 0.5 },
+                      { label: '🗓️ 1 Mahine Baad', months: 1 },
+                      { label: '🗓️ 2 Mahine Baad', months: 2 },
+                      { label: '🗓️ 3 Mahine Baad', months: 3 },
+                      { label: '🗓️ 6 Mahine Baad', months: 6 },
+                      { label: '🗓️ 1 Saal Baad', months: 12 },
+                    ].map((item) => (
+                      <button
+                        key={item.label}
+                        type="button"
+                        onClick={() => setCompetitorPreset(item.months, item.label)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                          form.competitorDuration === item.label
+                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700'
+                        }`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-indigo-700 font-medium mt-1.5">
+                    💡 <em>Clicking any duration auto-sets expiry date & creates a follow-up reminder 10 days before expiry!</em>
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Current Software Me Kya Problem Hai? (Why switch?)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Mehnga hai, WhatsApp auto messages nahi hain, support bekar hai..."
+                    value={form.switchingReason}
+                    onChange={(e) => setForm({ ...form, switchingReason: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-indigo-600"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* SECTION 5: Meeting Notes, Lead Temperature & Status */}
+          <div className="p-3.5 bg-slate-50/70 border border-slate-200/80 rounded-2xl space-y-3">
+            <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+              <FileCheck size={13} className="text-amber-600" />
+              <span>Meeting Discussion & Lead Qualification</span>
+            </h4>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Discussion Summary (Kya baat hui?) *
+              </label>
+              <textarea
+                rows={3}
                 required
-                placeholder="e.g. Saraswati Library, Apex Study Point"
-                value={form.businessName}
-                onChange={(e) => setForm({ ...form, businessName: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
+                placeholder="Met owner. Interested in 100-seat plan. Liked WhatsApp feature. Will call Monday."
+                value={form.discussionNotes}
+                onChange={(e) => setForm({ ...form, discussionNotes: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
               />
             </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Owner Name</label>
-              <input
-                type="text"
-                placeholder="e.g. Rakesh Kumar"
-                value={form.ownerName}
-                onChange={(e) => setForm({ ...form, ownerName: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
-              />
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-center">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Lead Temperature
+                </label>
+                <div className="flex gap-1.5">
+                  {LEAD_PRIORITY_OPTIONS.map((lp) => (
+                    <button
+                      key={lp.id}
+                      type="button"
+                      onClick={() => setForm({ ...form, leadPriority: lp.id })}
+                      className={`flex-1 py-1.5 text-center text-xs font-bold rounded-xl border transition cursor-pointer ${
+                        form.leadPriority === lp.id
+                          ? lp.color + ' ring-1'
+                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      {lp.id}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Lead Status
+                </label>
+                <select
+                  value={form.status}
+                  onChange={(e) => setForm({ ...form, status: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-blue-600 cursor-pointer"
+                >
+                  {VISIT_STATUSES.map((s) => (
+                    <option key={s.id} value={s.id}>{s.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="pt-4 sm:pt-5">
+                <label className="flex items-center gap-2 cursor-pointer bg-white px-3 py-2 border border-slate-200 rounded-xl">
+                  <input
+                    type="checkbox"
+                    checked={form.demoGiven}
+                    onChange={(e) => setForm({ ...form, demoGiven: e.target.checked })}
+                    className="w-4 h-4 rounded text-blue-600 cursor-pointer"
+                  />
+                  <span className="text-xs font-bold text-slate-800">
+                    💻 Live Demo Given
+                  </span>
+                </label>
+              </div>
             </div>
           </div>
 
-          {/* Phone */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Contact Mobile</label>
-              {form.phone && <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">✓ Auto-filled from Google</span>}
+          {/* SECTION 6: Smart Re-Visit & Reminder Scheduler (User Requirement!) */}
+          <div className="p-3.5 bg-amber-50/60 border border-amber-200/90 rounded-2xl space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-[11px] font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
+                <BellRing size={13} className="text-amber-600" />
+                <span>Smart Re-Visit & Follow-Up Reminder (Agla Kaam / Kab Milna Hai)</span>
+              </h4>
+              <span className="text-[10px] text-amber-700 font-semibold lowercase">
+                (30 min me aao, ya kal milo 2 baje)
+              </span>
             </div>
-            <input
-              type="tel"
-              placeholder="+91 98765 43210"
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600 font-medium"
-            />
-          </div>
 
-          {/* State, City, Location */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Quick Follow-up Timing Chips */}
             <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">State (राज्य) *</label>
-                {form.state && <span className="text-[9px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded">✓ Auto</span>}
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                Quick Re-visit Shortcuts (Banda bola tab milo):
+              </label>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {[
+                  { id: '30min', label: '⚡ In 30 Mins (Abhi busy hain)' },
+                  { id: '1hr', label: '⏱️ In 1 Hour' },
+                  { id: '2hr', label: '⏱️ In 2 Hours' },
+                  { id: 'today_evening', label: '🌇 Aaj Sham 5:00 PM' },
+                  { id: 'tomorrow_11am', label: '🌅 Kal Subah 11:00 AM' },
+                  { id: 'tomorrow_2pm', label: '☀️ Kal Dopahar 2:00 PM' },
+                  { id: '2days', label: '📅 Parso (In 2 Days)' },
+                  { id: '7days', label: '📅 Agle Hafte' },
+                ].map((chip) => (
+                  <button
+                    key={chip.id}
+                    type="button"
+                    onClick={() => setQuickFollowUp(chip.id)}
+                    className="px-2.5 py-1 bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold transition cursor-pointer shadow-2xs"
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Follow-up Callback Date
+                </label>
+                <input
+                  type="date"
+                  value={form.followUpDate}
+                  onChange={(e) => setForm({ ...form, followUpDate: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-amber-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Exact Time Slot (Kalam/Samay)
+                </label>
+                <input
+                  type="time"
+                  value={form.followUpTime}
+                  onChange={(e) => setForm({ ...form, followUpTime: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-amber-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Meeting Mode
+                </label>
+                <select
+                  value={form.followUpType}
+                  onChange={(e) => setForm({ ...form, followUpType: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-amber-600 cursor-pointer"
+                >
+                  <option value="In-Person Re-Visit">🏢 Physical Re-Visit</option>
+                  <option value="Phone Call">📞 Phone Call</option>
+                  <option value="Online Demo">💻 Online Demo / AnyDesk</option>
+                  <option value="WhatsApp Proposal">📱 WhatsApp Proposal</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Next Action Item Tags */}
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                Kya Kaam Karna Hai? (Action Reminder Tag)
+              </label>
+              <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                {NEXT_ACTION_TAGS.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => setForm({ ...form, nextActionItem: tag })}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                      form.nextActionItem === tag
+                        ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                ))}
               </div>
               <input
                 type="text"
-                required
-                placeholder="e.g. Madhya Pradesh"
-                value={form.state}
-                onChange={(e) => setForm({ ...form, state: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600 font-medium"
-              />
-            </div>
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">City (शहर) *</label>
-                {form.city && <span className="text-[9px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded">✓ Auto</span>}
-              </div>
-              <input
-                type="text"
-                required
-                placeholder="e.g. Guna"
-                value={form.city}
-                onChange={(e) => setForm({ ...form, city: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600 font-medium"
-              />
-            </div>
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Area / Location</label>
-                {form.address && <span className="text-[9px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded">✓ Auto</span>}
-              </div>
-              <input
-                type="text"
-                placeholder="e.g. Gaushala Mahaveerpura"
-                value={form.address}
-                onChange={(e) => setForm({ ...form, address: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600 font-medium"
+                placeholder="Specific Reminder Note: e.g. Bring laptop with offline demo, owner will be at counter, explain 24x7 pricing"
+                value={form.reminderNote}
+                onChange={(e) => setForm({ ...form, reminderNote: e.target.value })}
+                className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-amber-600"
               />
             </div>
           </div>
 
-          {/* Discussion Notes */}
-          <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Discussion Summary (Kya baat hui?) *</label>
-            <textarea
-              rows={3}
-              required
-              placeholder="Met owner. Interested in 100-seat plan. Liked WhatsApp feature. Will call Monday."
-              value={form.discussionNotes}
-              onChange={(e) => setForm({ ...form, discussionNotes: e.target.value })}
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
-            />
-          </div>
-
-          {/* Times & Status */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* SECTION 7: Visit Times */}
+          <div className="grid grid-cols-2 gap-3 text-xs">
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Check-in Time</label>
+              <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Check-in Time</label>
               <input
                 type="text"
-                placeholder="11:30 AM"
                 value={form.checkInTime}
                 onChange={(e) => setForm({ ...form, checkInTime: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 outline-none"
               />
             </div>
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Check-out Time</label>
+              <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Check-out Time</label>
               <input
                 type="text"
-                placeholder="12:00 PM"
                 value={form.checkOutTime}
                 onChange={(e) => setForm({ ...form, checkOutTime: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Lead Status</label>
-              <select
-                value={form.status}
-                onChange={(e) => setForm({ ...form, status: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600 cursor-pointer"
-              >
-                {VISIT_STATUSES.map((s) => (
-                  <option key={s.id} value={s.id}>{s.label}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Demo & Follow-up */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center pt-2">
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="demoCheck"
-                checked={form.demoGiven}
-                onChange={(e) => setForm({ ...form, demoGiven: e.target.checked })}
-                className="w-4 h-4 rounded text-blue-600 cursor-pointer"
-              />
-              <label htmlFor="demoCheck" className="text-xs font-bold text-slate-700 cursor-pointer">
-                Live Software Demo was given
-              </label>
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Follow-up Date</label>
-              <input
-                type="date"
-                value={form.followUpDate}
-                onChange={(e) => setForm({ ...form, followUpDate: e.target.value })}
-                className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 outline-none"
               />
             </div>
           </div>
 
-          {/* Submit */}
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+          {/* Submit Buttons */}
+          <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
             <button
               type="button"
               onClick={() => { setShowModal(false); setEditingVisit(null); }}
@@ -1631,13 +2274,16 @@ export const FieldMarketing = () => {
             <button
               type="submit"
               disabled={addMutation.isPending || editMutation.isPending}
-              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+              className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
             >
-              {addMutation.isPending || editMutation.isPending
-                ? 'Saving...'
-                : editingVisit
-                ? 'Update Visit'
-                : 'Save Visit Record'}
+              <CheckCircle2 size={15} />
+              <span>
+                {addMutation.isPending || editMutation.isPending
+                  ? 'Saving...'
+                  : editingVisit
+                  ? 'Update Visit Record'
+                  : 'Save Field Visit Record'}
+              </span>
             </button>
           </div>
         </form>
@@ -1649,17 +2295,66 @@ export const FieldMarketing = () => {
         onClose={() => setSelectedVisit(null)}
         title={selectedVisit?.businessName || 'Visit Details'}
         subtitle={`Logged by ${selectedVisit?.staffName} on ${formatDate(selectedVisit?.createdAt)}`}
+        maxWidth="max-w-2xl"
       >
         {selectedVisit && (
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3 bg-slate-50 p-4 rounded-xl text-xs">
+            {/* Top Photo & Status Banner */}
+            {selectedVisit.photoUrl && (
+              <div className="relative rounded-2xl overflow-hidden border border-slate-200 shadow-xs max-h-56 bg-slate-900 group">
+                <img
+                  src={selectedVisit.photoUrl}
+                  alt={selectedVisit.businessName}
+                  className="w-full h-56 object-cover object-center group-hover:scale-105 transition duration-300"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent flex items-end justify-between p-3.5">
+                  <span className="text-white text-xs font-bold flex items-center gap-1.5">
+                    <Camera size={14} className="text-emerald-400" />
+                    <span>On-Site Photo Proof</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewPhotoUrl(selectedVisit.photoUrl)}
+                    className="px-2.5 py-1 bg-white/90 hover:bg-white text-slate-900 text-xs font-bold rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
+                  >
+                    <span>View Full Size</span>
+                    <ExternalLink size={11} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-slate-50 p-4 rounded-2xl text-xs border border-slate-200/80">
               <div>
                 <span className="text-slate-400 font-bold uppercase block mb-0.5">Target Type</span>
                 <span className="font-bold text-slate-800">{selectedVisit.clientType}</span>
+                {selectedVisit.seatCapacity && (
+                  <span className="block text-[11px] text-blue-600 font-bold mt-0.5">
+                    🪑 {selectedVisit.seatCapacity}
+                  </span>
+                )}
               </div>
               <div>
-                <span className="text-slate-400 font-bold uppercase block mb-0.5">Lead Status</span>
-                <Badge variant={getStatusBadgeVariant(selectedVisit.status)} size="sm">{selectedVisit.status}</Badge>
+                <span className="text-slate-400 font-bold uppercase block mb-0.5">Lead Status & Priority</span>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <Badge variant={getStatusBadgeVariant(selectedVisit.status)} size="sm">{selectedVisit.status}</Badge>
+                  {selectedVisit.leadPriority && (
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
+                      {selectedVisit.leadPriority === 'Hot' ? '🔥 Hot' : selectedVisit.leadPriority === 'Warm' ? '⚡ Warm' : '❄️ Cold'}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <span className="text-slate-400 font-bold uppercase block mb-0.5">Person Met</span>
+                <span className="font-bold text-slate-800 block">
+                  {selectedVisit.personMet || 'Owner'}
+                </span>
+                {selectedVisit.contactPersonName && (
+                  <span className="text-[11px] text-slate-500 block">
+                    ({selectedVisit.contactPersonName})
+                  </span>
+                )}
               </div>
               <div>
                 <span className="text-slate-400 font-bold uppercase block mb-0.5">Owner Contact</span>
@@ -1688,11 +2383,67 @@ export const FieldMarketing = () => {
                   {selectedVisit.city || 'N/A'}{selectedVisit.state ? `, ${selectedVisit.state}` : ''}
                 </span>
               </div>
-              <div className="col-span-2">
+              <div>
                 <span className="text-slate-400 font-bold uppercase block mb-0.5">Location / Area</span>
                 <span className="font-semibold text-slate-800">{selectedVisit.address || 'N/A'}</span>
               </div>
             </div>
+
+            {/* Current Software & Competitor Box */}
+            <div className="p-3.5 bg-indigo-50/60 rounded-2xl border border-indigo-100 text-xs">
+              <span className="text-[10px] font-bold text-indigo-900 uppercase tracking-wider block mb-1">
+                💻 Current Management System & Competitor Info
+              </span>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <span className="font-bold text-indigo-950">
+                  {selectedVisit.currentSoftwareType || 'Manual Register / Diary'}
+                </span>
+                {selectedVisit.competitorName && (
+                  <span className="px-2 py-0.5 bg-indigo-600 text-white rounded-md text-[10px] font-bold">
+                    {selectedVisit.competitorName}
+                  </span>
+                )}
+              </div>
+              {selectedVisit.competitorExpiryDate && (
+                <p className="text-[11px] text-indigo-800 mt-1 font-semibold">
+                  ⏳ Subscription Expiry: <strong>{selectedVisit.competitorExpiryDate}</strong>
+                  {selectedVisit.competitorDuration && ` (${selectedVisit.competitorDuration})`}
+                </p>
+              )}
+              {selectedVisit.switchingReason && (
+                <p className="text-[11px] text-slate-600 mt-1 italic">
+                  Issue with current software: "{selectedVisit.switchingReason}"
+                </p>
+              )}
+            </div>
+
+            {/* Next Action Item & Follow-Up Alert Box */}
+            {selectedVisit.followUpDate && (
+              <div className="p-3.5 bg-amber-50/80 rounded-2xl border border-amber-200 text-xs space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-amber-900 flex items-center gap-1.5 uppercase text-[10px] tracking-wider">
+                    <BellRing size={12} className="text-amber-600" />
+                    <span>Follow-Up Callback Scheduled</span>
+                  </span>
+                  <span className="px-2 py-0.5 bg-amber-200/80 text-amber-900 font-bold rounded text-[10px]">
+                    {selectedVisit.followUpType || 'In-Person Re-Visit'}
+                  </span>
+                </div>
+                <p className="text-xs font-black text-amber-950">
+                  📅 {selectedVisit.followUpDate} {selectedVisit.followUpTime ? `@ ${selectedVisit.followUpTime}` : ''}
+                </p>
+                {selectedVisit.nextActionItem && (
+                  <p className="text-xs font-bold text-amber-800">
+                    🎯 Agenda: {selectedVisit.nextActionItem}
+                  </p>
+                )}
+                {selectedVisit.reminderNote && (
+                  <p className="text-[11px] text-slate-700 italic bg-white/70 p-2 rounded-lg border border-amber-200/60">
+                    📝 Reminder: {selectedVisit.reminderNote}
+                  </p>
+                )}
+              </div>
+            )}
 
             <div>
               <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">Meeting Discussion</span>
@@ -1708,7 +2459,7 @@ export const FieldMarketing = () => {
                   📜 All Visits to this Library ({getPlaceVisitHistory(selectedVisit.placeId).length})
                 </span>
                 <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {getPlaceVisitHistory(selectedVisit.placeId).map((hv, idx) => (
+                  {getPlaceVisitHistory(selectedVisit.placeId).map((hv) => (
                     <div key={hv.id} className={`p-2.5 rounded-lg border text-xs ${hv.id === selectedVisit.id ? 'bg-blue-50 border-blue-200' : 'bg-slate-50 border-slate-200'}`}>
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-slate-800">{hv.staffName} — {formatDate(hv.createdAt)}</span>
@@ -1772,6 +2523,44 @@ export const FieldMarketing = () => {
           </div>
         )}
       </Modal>
+
+      {/* ═══ Photo Lightbox Preview Modal ═══ */}
+      {previewPhotoUrl && (
+        <Modal
+          isOpen={!!previewPhotoUrl}
+          onClose={() => setPreviewPhotoUrl(null)}
+          title="📸 Library On-Site Photo Proof"
+          subtitle="Captured during field marketing verification"
+          maxWidth="max-w-3xl"
+        >
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-full max-h-[75vh] flex items-center justify-center bg-black/5 rounded-2xl overflow-hidden border border-slate-200">
+              <img
+                src={previewPhotoUrl}
+                alt="Library Proof Preview"
+                className="max-h-[75vh] max-w-full object-contain rounded-2xl"
+              />
+            </div>
+            <div className="flex items-center justify-between w-full pt-2 border-t border-slate-100">
+              <a
+                href={previewPhotoUrl}
+                download="library-proof.jpg"
+                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition flex items-center gap-1.5"
+              >
+                <Download size={13} />
+                <span>Save Image</span>
+              </a>
+              <button
+                type="button"
+                onClick={() => setPreviewPhotoUrl(null)}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };

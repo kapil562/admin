@@ -32,11 +32,113 @@ import {
   Star, 
   AlertTriangle, 
   PhoneCall, 
-  Edit3
+  Edit3,
+  Camera,
+  X,
+  Layers,
+  BellRing
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const VISIT_STATUSES = ['Interested', 'Demo Given', 'Follow Up', 'Deal Closed', 'Not Interested'];
+
+const PERSON_MET_OPTIONS = [
+  'Owner / Director',
+  'Manager / In-Charge',
+  'Receptionist / Staff',
+  'Partner / Co-Founder',
+  'Other',
+];
+
+const SEAT_CAPACITY_OPTIONS = [
+  '< 50 Seats',
+  '50 - 100 Seats',
+  '100 - 150 Seats',
+  '150 - 250 Seats',
+  '250+ Seats',
+];
+
+const CURRENT_SOFTWARE_OPTIONS = [
+  { id: 'Manual Register', label: '📒 Register / Diary' },
+  { id: 'Excel / Spreadsheets', label: '📊 Excel / Sheets' },
+  { id: 'Competitor Software', label: '💻 Other Software' },
+  { id: 'New Library', label: '🆕 New Setup' },
+];
+
+const NEXT_ACTION_TAGS = [
+  '💻 Give Full Demo',
+  '🤝 Meet Owner Directly',
+  '💰 Price Negotiation',
+  '📝 Collect Payment',
+  '🔄 Excel Data Help',
+  '📞 Call back',
+];
+
+const compressImage = (file, maxWidth = 1000, maxHeight = 1000, quality = 0.7) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        if (width > maxWidth || height > maxHeight) {
+          if (width > height) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          } else {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+};
+
+const initialStaffVisitForm = {
+  clientType: 'Library',
+  businessName: '',
+  ownerName: '',
+  phone: '',
+  secondaryPhone: '',
+  state: '',
+  city: '',
+  address: '',
+  discussionNotes: '',
+  demoGiven: false,
+  status: 'Interested',
+  personMet: 'Owner / Director',
+  contactPersonName: '',
+  seatCapacity: '',
+  currentSoftwareType: 'Manual Register',
+  competitorName: '',
+  competitorExpiryDate: '',
+  competitorDuration: '',
+  switchingReason: '',
+  followUpDate: '',
+  followUpTime: '',
+  followUpType: 'In-Person Re-Visit',
+  nextActionItem: '',
+  reminderNote: '',
+  photoUrl: null,
+  checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+  checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+  durationMinutes: 20,
+  placeId: '',
+  placeName: '',
+  placeAddress: ''
+};
 
 export const StaffDashboard = () => {
   const { user } = useAuth();
@@ -49,25 +151,7 @@ export const StaffDashboard = () => {
   const [statusDropdownId, setStatusDropdownId] = useState(null);
 
   // Form State for logging visit
-  const [form, setForm] = useState({
-    clientType: 'Library',
-    businessName: '',
-    ownerName: '',
-    phone: '',
-    state: '',
-    city: '',
-    address: '',
-    discussionNotes: '',
-    demoGiven: false,
-    status: 'Interested',
-    followUpDate: '',
-    checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-    checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-    durationMinutes: 20,
-    placeId: '',
-    placeName: '',
-    placeAddress: ''
-  });
+  const [form, setForm] = useState(initialStaffVisitForm);
 
   // 1. Fetch Staff info for compensation details
   const { data: staffList = [] } = useQuery({
@@ -126,39 +210,116 @@ export const StaffDashboard = () => {
   const resetVisitForm = (prefill = null) => {
     if (prefill) {
       setForm({
-        ...form,
+        ...initialStaffVisitForm,
+        clientType: prefill.clientType || (activeVerticals.length === 1 ? activeVerticals[0].shortName : 'Library'),
         businessName: prefill.businessName || '',
         ownerName: prefill.ownerName || '',
         phone: prefill.phone || '',
+        secondaryPhone: prefill.secondaryPhone || '',
         state: prefill.state || '',
         city: prefill.city || '',
         address: prefill.address || '',
+        personMet: prefill.personMet || 'Owner / Director',
+        contactPersonName: prefill.contactPersonName || '',
+        seatCapacity: prefill.seatCapacity || '',
+        currentSoftwareType: prefill.currentSoftwareType || 'Manual Register',
+        competitorName: prefill.competitorName || '',
+        competitorExpiryDate: prefill.competitorExpiryDate || '',
+        competitorDuration: prefill.competitorDuration || '',
         placeId: prefill.placeId || '',
         placeName: prefill.placeName || '',
         placeAddress: prefill.placeAddress || '',
       });
     } else {
       setForm({
+        ...initialStaffVisitForm,
         clientType: activeVerticals.length === 1 ? activeVerticals[0].shortName : 'Library',
-        businessName: '',
-        ownerName: '',
-        phone: '',
-        state: '',
-        city: '',
-        address: '',
-        discussionNotes: '',
-        demoGiven: false,
-        status: 'Interested',
-        followUpDate: '',
-        checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-        checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-        durationMinutes: 20,
-        placeId: '',
-        placeName: '',
-        placeAddress: ''
       });
     }
     setGpsData(null);
+  };
+
+  const handlePhotoCapture = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      toast.loading('Processing photo proof...', { id: 'staff-photo' });
+      const compressed = await compressImage(file);
+      setForm((prev) => ({ ...prev, photoUrl: compressed }));
+      toast.success('Photo attached! 📷', { id: 'staff-photo' });
+    } catch (err) {
+      console.error('Failed to compress image:', err);
+      toast.error('Failed to process image', { id: 'staff-photo' });
+    }
+  };
+
+  const setQuickFollowUp = (type) => {
+    const now = new Date();
+    let targetDate = new Date();
+    let timeStr = '14:00';
+
+    if (type === '30min') {
+      targetDate = new Date(now.getTime() + 30 * 60 * 1000);
+      const hrs = String(targetDate.getHours()).padStart(2, '0');
+      const mins = String(targetDate.getMinutes()).padStart(2, '0');
+      timeStr = `${hrs}:${mins}`;
+    } else if (type === '1hr') {
+      targetDate = new Date(now.getTime() + 60 * 60 * 1000);
+      const hrs = String(targetDate.getHours()).padStart(2, '0');
+      const mins = String(targetDate.getMinutes()).padStart(2, '0');
+      timeStr = `${hrs}:${mins}`;
+    } else if (type === '2hr') {
+      targetDate = new Date(now.getTime() + 120 * 60 * 1000);
+      const hrs = String(targetDate.getHours()).padStart(2, '0');
+      const mins = String(targetDate.getMinutes()).padStart(2, '0');
+      timeStr = `${hrs}:${mins}`;
+    } else if (type === 'today_evening') {
+      timeStr = '17:00';
+    } else if (type === 'tomorrow_11am') {
+      targetDate.setDate(targetDate.getDate() + 1);
+      timeStr = '11:00';
+    } else if (type === 'tomorrow_2pm') {
+      targetDate.setDate(targetDate.getDate() + 1);
+      timeStr = '14:00';
+    } else if (type === '2days') {
+      targetDate.setDate(targetDate.getDate() + 2);
+      timeStr = '12:00';
+    } else if (type === '7days') {
+      targetDate.setDate(targetDate.getDate() + 7);
+      timeStr = '12:00';
+    }
+
+    const dateStr = targetDate.toISOString().split('T')[0];
+    setForm((prev) => ({
+      ...prev,
+      status: 'Follow Up',
+      followUpDate: dateStr,
+      followUpTime: timeStr,
+    }));
+    toast.success(`Follow-up: ${dateStr} @ ${timeStr}`);
+  };
+
+  const setCompetitorPreset = (months, label) => {
+    const target = new Date();
+    target.setMonth(target.getMonth() + months);
+    const expiryStr = target.toISOString().split('T')[0];
+
+    const reminderDate = new Date(target);
+    reminderDate.setDate(reminderDate.getDate() - 10);
+    const reminderStr = reminderDate.toISOString().split('T')[0];
+
+    setForm((prev) => ({
+      ...prev,
+      currentSoftwareType: 'Competitor Software',
+      competitorDuration: label,
+      competitorExpiryDate: expiryStr,
+      followUpDate: reminderStr,
+      followUpTime: '11:00',
+      status: 'Follow Up',
+      nextActionItem: `Competitor expiring - offer migration`,
+      reminderNote: `Competitor plan expires on ${expiryStr}`,
+    }));
+    toast.success(`Expiry set: ${expiryStr} (Reminder: 10 days before)`);
   };
 
   const openVisitModal = (prefill = null) => {
@@ -329,10 +490,26 @@ export const StaffDashboard = () => {
                   <div className="flex items-start justify-between gap-2">
                     <h4 className="font-bold text-slate-800 text-sm truncate">{f.businessName}</h4>
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${f.followUpDate < todayStr ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
-                      {f.followUpDate}
+                      {f.followUpDate} {f.followUpTime ? `@ ${f.followUpTime}` : ''}
                     </span>
                   </div>
-                  <div className="text-xs text-slate-600 mt-1 font-medium">{f.ownerName}</div>
+                  <div className="text-xs text-slate-600 mt-1 font-medium flex items-center justify-between">
+                    <span>{f.ownerName}</span>
+                    {f.personMet && <span className="text-[10px] text-slate-400">({f.personMet})</span>}
+                  </div>
+
+                  {f.nextActionItem && (
+                    <div className="mt-2 text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-1 rounded border border-amber-200">
+                      🎯 {f.nextActionItem}
+                    </div>
+                  )}
+
+                  {f.reminderNote && (
+                    <p className="text-[10px] text-slate-600 mt-1 italic">
+                      📝 {f.reminderNote}
+                    </p>
+                  )}
+
                   {f.phone && (
                     <div className="flex items-center gap-2 mt-2">
                       <a href={`tel:${f.phone}`} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-medium hover:bg-blue-100 transition">
@@ -343,6 +520,7 @@ export const StaffDashboard = () => {
                       </a>
                     </div>
                   )}
+
                   {f.discussionNotes && (
                     <p className="text-[11px] text-slate-500 mt-3 line-clamp-2 italic border-l-2 border-amber-200 pl-2">
                       "{f.discussionNotes.substring(0, 80)}{f.discussionNotes.length > 80 ? '...' : ''}"
@@ -579,28 +757,63 @@ export const StaffDashboard = () => {
         isOpen={showVisitModal}
         onClose={() => setShowVisitModal(false)}
         title="Log On-Site Client Visit"
-        subtitle="GPS position will verify you are physically at the client location"
+        subtitle="Capture GPS, photo proof, competitor expiry, and smart follow-up schedule"
+        maxWidth="max-w-2xl"
       >
         <form onSubmit={handleVisitSubmit} className="space-y-4">
-          {/* GPS Pinpoint */}
-          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-2">
-            <div>
-              <p className="text-xs font-bold text-slate-900">GPS On-Site Verification</p>
-              <p className="text-[11px] text-slate-500">
-                {gpsData ? `Locked: ±${gpsData.accuracy}m` : 'Required for verified visit'}
-              </p>
+          {/* Dual Verification: GPS & Photo Proof */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* GPS Pinpoint */}
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-slate-900 truncate">GPS Verification</p>
+                <p className="text-[10px] text-slate-500 truncate">
+                  {gpsData ? `Locked: ±${gpsData.accuracy}m` : 'Required for on-site visit'}
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={capturingGps}
+                onClick={handleCaptureGPS}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold text-white transition flex items-center gap-1 shrink-0 ${
+                  gpsData ? 'bg-emerald-600' : 'bg-blue-600'
+                }`}
+              >
+                <Crosshair size={13} className={capturingGps ? 'animate-spin' : ''} />
+                <span>{capturingGps ? 'Locking...' : gpsData ? 'GPS Locked' : 'Lock GPS'}</span>
+              </button>
             </div>
-            <button
-              type="button"
-              disabled={capturingGps}
-              onClick={handleCaptureGPS}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold text-white transition flex items-center gap-1 ${
-                gpsData ? 'bg-emerald-600' : 'bg-blue-600'
-              }`}
-            >
-              <Crosshair size={13} className={capturingGps ? 'animate-spin' : ''} />
-              <span>{capturingGps ? 'Locking...' : gpsData ? 'GPS Verified' : 'Lock GPS'}</span>
-            </button>
+
+            {/* Photo Proof */}
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                {form.photoUrl ? (
+                  <img src={form.photoUrl} alt="Proof" className="w-8 h-8 rounded-lg object-cover border border-emerald-400 shrink-0" />
+                ) : (
+                  <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                    <Camera size={16} />
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-slate-900 truncate">Library Photo</p>
+                  <p className="text-[10px] text-slate-500 truncate">
+                    {form.photoUrl ? '✓ Photo Attached' : 'Board / Reception'}
+                  </p>
+                </div>
+              </div>
+
+              <label className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold cursor-pointer transition flex items-center gap-1 shrink-0">
+                <Camera size={12} />
+                <span>{form.photoUrl ? 'Retake' : 'Capture'}</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handlePhotoCapture}
+                  className="hidden"
+                />
+              </label>
+            </div>
           </div>
 
           {/* Active Verticals Selector (if more than 1 active) */}
@@ -628,48 +841,95 @@ export const StaffDashboard = () => {
             </div>
           )}
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-              Client Business / Center Name *
-            </label>
-            <input
-              type="text"
-              required
-              placeholder="e.g. Saraswati Library, Apex Study Point"
-              value={form.businessName}
-              onChange={(e) => setForm({ ...form, businessName: e.target.value })}
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
+          {/* Business Name & Scale */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="sm:col-span-2">
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Owner Name
+                Client / Library Name *
               </label>
               <input
                 type="text"
-                placeholder="Rakesh Kumar"
-                value={form.ownerName}
-                onChange={(e) => setForm({ ...form, ownerName: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                required
+                placeholder="e.g. Saraswati Library, Apex Study Point"
+                value={form.businessName}
+                onChange={(e) => setForm({ ...form, businessName: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600 font-bold"
               />
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Mobile Number
+                Total Seats
               </label>
-              <input
-                type="tel"
-                placeholder="+91 98765 43210"
-                value={form.phone}
-                onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
-              />
+              <select
+                value={form.seatCapacity}
+                onChange={(e) => setForm({ ...form, seatCapacity: e.target.value })}
+                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600 font-semibold"
+              >
+                <option value="">-- Seats --</option>
+                {SEAT_CAPACITY_OPTIONS.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
             </div>
           </div>
 
-          {/* State, City, Location 3 Separate Fields */}
+          {/* Person Met & Direct Contacts */}
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Kisse Mulakat Hui? (Person Met)</label>
+              <div className="flex flex-wrap gap-1.5">
+                {PERSON_MET_OPTIONS.map((pm) => (
+                  <button
+                    key={pm}
+                    type="button"
+                    onClick={() => setForm({ ...form, personMet: pm })}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition border ${
+                      form.personMet === pm
+                        ? 'bg-emerald-600 text-white border-emerald-600'
+                        : 'bg-white text-slate-700 border-slate-200'
+                    }`}
+                  >
+                    {pm}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-0.5">Owner Name</label>
+                <input
+                  type="text"
+                  placeholder="Rakesh Kumar"
+                  value={form.ownerName}
+                  onChange={(e) => setForm({ ...form, ownerName: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-0.5">Mobile Number</label>
+                <input
+                  type="tel"
+                  placeholder="+91 98765 43210"
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600 font-semibold"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-0.5">WhatsApp / Alt</label>
+                <input
+                  type="tel"
+                  placeholder="+91 91234 56789"
+                  value={form.secondaryPhone}
+                  onChange={(e) => setForm({ ...form, secondaryPhone: e.target.value })}
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* State, City, Location */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
@@ -678,10 +938,10 @@ export const StaffDashboard = () => {
               <input
                 type="text"
                 required
-                placeholder="e.g. Rajasthan, UP, Delhi"
+                placeholder="Madhya Pradesh"
                 value={form.state}
                 onChange={(e) => setForm({ ...form, state: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
               />
             </div>
             <div>
@@ -691,41 +951,185 @@ export const StaffDashboard = () => {
               <input
                 type="text"
                 required
-                placeholder="e.g. Jaipur, Kota, Lucknow"
+                placeholder="Guna"
                 value={form.city}
                 onChange={(e) => setForm({ ...form, city: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
               />
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Location / Area (क्षेत्र / पता)
+                Area / Street
               </label>
               <input
                 type="text"
-                placeholder="e.g. Mansarovar, Main Market"
+                placeholder="Near Station / Market"
                 value={form.address}
                 onChange={(e) => setForm({ ...form, address: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+                className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
               />
             </div>
           </div>
 
+          {/* Current Software & Competitor Status */}
+          <div className="p-3 bg-indigo-50/60 border border-indigo-200 rounded-xl space-y-2.5">
+            <span className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider flex items-center gap-1">
+              <Layers size={12} className="text-indigo-600" />
+              <span>Abhi Kaise Manage Ho Rahi Hai? (Competitor Tracking)</span>
+            </span>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+              {CURRENT_SOFTWARE_OPTIONS.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setForm({ ...form, currentSoftwareType: c.id })}
+                  className={`p-2 rounded-lg text-xs font-bold border transition text-left ${
+                    form.currentSoftwareType === c.id
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-white text-slate-700 border-slate-200'
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+
+            {form.currentSoftwareType === 'Competitor Software' && (
+              <div className="p-2.5 bg-white border border-indigo-200 rounded-lg space-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    placeholder="Competitor Name (e.g. Librex, Reader...)"
+                    value={form.competitorName}
+                    onChange={(e) => setForm({ ...form, competitorName: e.target.value })}
+                    className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 font-bold outline-none"
+                  />
+                  <input
+                    type="date"
+                    value={form.competitorExpiryDate}
+                    onChange={(e) => setForm({ ...form, competitorExpiryDate: e.target.value })}
+                    className="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 font-bold outline-none"
+                    title="Current subscription expiry date"
+                  />
+                </div>
+
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] text-slate-500 font-bold">Kab Khatam?</span>
+                  {[
+                    { label: '15 Din', months: 0.5 },
+                    { label: '1 Month', months: 1 },
+                    { label: '2 Months', months: 2 },
+                    { label: '3 Months', months: 3 },
+                    { label: '6 Months', months: 6 },
+                  ].map((dur) => (
+                    <button
+                      key={dur.label}
+                      type="button"
+                      onClick={() => setCompetitorPreset(dur.months, dur.label)}
+                      className="px-2 py-0.5 rounded text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 cursor-pointer"
+                    >
+                      {dur.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Discussion Notes */}
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
               Meeting Discussion Notes *
             </label>
             <textarea
-              rows={3}
+              rows={2}
               required
               placeholder="Kya baat hui? Owner ka reaction, software requirement, demo response..."
               value={form.discussionNotes}
               onChange={(e) => setForm({ ...form, discussionNotes: e.target.value })}
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
+              className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          {/* Smart Re-Visit & Reminder Section */}
+          <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2.5">
+            <span className="text-[11px] font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1">
+              <BellRing size={12} className="text-amber-600" />
+              <span>Smart Re-Visit & Reminder (30 min me aao ya kal 2 baje)</span>
+            </span>
+
+            {/* Quick Timing Chips */}
+            <div className="flex items-center gap-1 flex-wrap">
+              {[
+                { id: '30min', label: '⚡ 30 Mins' },
+                { id: '1hr', label: '⏱️ 1 Hr' },
+                { id: '2hr', label: '⏱️ 2 Hrs' },
+                { id: 'today_evening', label: '🌇 Aaj 5 PM' },
+                { id: 'tomorrow_11am', label: '🌅 Kal 11 AM' },
+                { id: 'tomorrow_2pm', label: '☀️ Kal 2 PM' },
+                { id: '2days', label: '📅 Parso' },
+              ].map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setQuickFollowUp(c.id)}
+                  className="px-2 py-0.5 rounded text-[11px] font-bold bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs"
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Date</label>
+                <input
+                  type="date"
+                  value={form.followUpDate}
+                  onChange={(e) => setForm({ ...form, followUpDate: e.target.value })}
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-900 font-bold outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Time Slot</label>
+                <input
+                  type="time"
+                  value={form.followUpTime}
+                  onChange={(e) => setForm({ ...form, followUpTime: e.target.value })}
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-900 font-bold outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Action Agenda Tags */}
+            <div className="flex items-center gap-1 flex-wrap">
+              {NEXT_ACTION_TAGS.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => setForm({ ...form, nextActionItem: tag })}
+                  className={`px-2 py-0.5 rounded text-[10px] font-bold transition border ${
+                    form.nextActionItem === tag
+                      ? 'bg-amber-600 text-white border-amber-600'
+                      : 'bg-white text-slate-700 border-slate-200'
+                  }`}
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+
+            <input
+              type="text"
+              placeholder="Reminder Note (e.g. Kal owner milenge, laptop le jana hai)"
+              value={form.reminderNote}
+              onChange={(e) => setForm({ ...form, reminderNote: e.target.value })}
+              className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-900 outline-none"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 items-center">
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                 Lead Status
@@ -733,7 +1137,7 @@ export const StaffDashboard = () => {
               <select
                 value={form.status}
                 onChange={(e) => setForm({ ...form, status: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600 cursor-pointer"
+                className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600 cursor-pointer font-bold"
               >
                 <option value="Interested">Interested (Good Lead)</option>
                 <option value="Demo Given">Software Demo Given</option>
@@ -743,30 +1147,19 @@ export const StaffDashboard = () => {
               </select>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Follow-up Callback Date
+            <div className="pt-4">
+              <label className="flex items-center gap-2 cursor-pointer bg-slate-50 p-2 rounded-xl border border-slate-200">
+                <input
+                  type="checkbox"
+                  checked={form.demoGiven}
+                  onChange={(e) => setForm({ ...form, demoGiven: e.target.checked })}
+                  className="w-4 h-4 rounded text-blue-600 cursor-pointer"
+                />
+                <span className="text-xs font-bold text-slate-800">
+                  💻 Live Demo Given
+                </span>
               </label>
-              <input
-                type="date"
-                value={form.followUpDate}
-                onChange={(e) => setForm({ ...form, followUpDate: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
-              />
             </div>
-          </div>
-
-          <div className="flex items-center gap-2 pt-1">
-            <input
-              type="checkbox"
-              id="staffDemo"
-              checked={form.demoGiven}
-              onChange={(e) => setForm({ ...form, demoGiven: e.target.checked })}
-              className="w-4 h-4 rounded text-blue-600 cursor-pointer"
-            />
-            <label htmlFor="staffDemo" className="text-xs font-semibold text-slate-700 cursor-pointer">
-              Software demo presented to client
-            </label>
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
@@ -780,9 +1173,10 @@ export const StaffDashboard = () => {
             <button
               type="submit"
               disabled={addVisitMutation.isPending}
-              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer"
+              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5"
             >
-              {addVisitMutation.isPending ? 'Saving...' : 'Save Visit Record'}
+              <Check size={14} />
+              <span>{addVisitMutation.isPending ? 'Saving...' : 'Save Visit Record'}</span>
             </button>
           </div>
         </form>

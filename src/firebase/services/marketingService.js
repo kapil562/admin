@@ -77,6 +77,22 @@ export const logFieldVisit = async (visitData) => {
     checkInTime: visitData.checkInTime || new Date().toISOString(),
     checkOutTime: visitData.checkOutTime || new Date().toISOString(),
     durationMinutes: Number(visitData.durationMinutes) || 0,
+    // Field Marketing Enhanced Fields
+    photoUrl: visitData.photoUrl || null,
+    personMet: visitData.personMet || 'Owner',
+    contactPersonName: visitData.contactPersonName ? visitData.contactPersonName.trim() : '',
+    secondaryPhone: visitData.secondaryPhone ? visitData.secondaryPhone.trim() : '',
+    seatCapacity: visitData.seatCapacity || '',
+    currentSoftwareType: visitData.currentSoftwareType || 'Manual Register',
+    competitorName: visitData.competitorName ? visitData.competitorName.trim() : '',
+    competitorExpiryDate: visitData.competitorExpiryDate || '',
+    competitorDuration: visitData.competitorDuration || '',
+    switchingReason: visitData.switchingReason || '',
+    followUpTime: visitData.followUpTime || '',
+    followUpType: visitData.followUpType || 'In-Person Re-Visit',
+    nextActionItem: visitData.nextActionItem || '',
+    reminderNote: visitData.reminderNote ? visitData.reminderNote.trim() : '',
+    leadPriority: visitData.leadPriority || 'Warm',
     // Google Place linking fields
     placeId: visitData.placeId || null,
     placeName: visitData.placeName ? visitData.placeName.trim() : '',
@@ -113,6 +129,23 @@ export const updateFieldVisit = async (id, visitData) => {
   if (visitData.checkOutTime !== undefined) cleaned.checkOutTime = visitData.checkOutTime;
   if (visitData.durationMinutes !== undefined) cleaned.durationMinutes = Number(visitData.durationMinutes);
   if (visitData.location !== undefined) cleaned.location = visitData.location;
+
+  // Enhanced fields
+  if (visitData.photoUrl !== undefined) cleaned.photoUrl = visitData.photoUrl;
+  if (visitData.personMet !== undefined) cleaned.personMet = visitData.personMet;
+  if (visitData.contactPersonName !== undefined) cleaned.contactPersonName = visitData.contactPersonName.trim();
+  if (visitData.secondaryPhone !== undefined) cleaned.secondaryPhone = visitData.secondaryPhone.trim();
+  if (visitData.seatCapacity !== undefined) cleaned.seatCapacity = visitData.seatCapacity;
+  if (visitData.currentSoftwareType !== undefined) cleaned.currentSoftwareType = visitData.currentSoftwareType;
+  if (visitData.competitorName !== undefined) cleaned.competitorName = visitData.competitorName.trim();
+  if (visitData.competitorExpiryDate !== undefined) cleaned.competitorExpiryDate = visitData.competitorExpiryDate;
+  if (visitData.competitorDuration !== undefined) cleaned.competitorDuration = visitData.competitorDuration;
+  if (visitData.switchingReason !== undefined) cleaned.switchingReason = visitData.switchingReason;
+  if (visitData.followUpTime !== undefined) cleaned.followUpTime = visitData.followUpTime;
+  if (visitData.followUpType !== undefined) cleaned.followUpType = visitData.followUpType;
+  if (visitData.nextActionItem !== undefined) cleaned.nextActionItem = visitData.nextActionItem;
+  if (visitData.reminderNote !== undefined) cleaned.reminderNote = visitData.reminderNote.trim();
+  if (visitData.leadPriority !== undefined) cleaned.leadPriority = visitData.leadPriority;
 
   cleaned.updatedAt = new Date().toISOString();
 
