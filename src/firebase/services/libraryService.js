@@ -61,6 +61,7 @@ export const getLibraryClients = async () => {
           email: data.email || 'N/A',
           phone: data.phone || data.phoneNumber || data.mobile || 'N/A',
           address: data.address || data.city || data.location || 'India',
+          logoUrl: data.logoUrl || data.logo || null,
           messageBalance: data.messageBalance || 0,
           planName,
           status,

@@ -30,24 +30,7 @@ export const Login = () => {
     }
   };
 
-  const handleQuickAdminLogin = async () => {
-    setLoading(true);
-    try {
-      await loginAsMasterAdmin();
-      toast.success('Signed in as Super Administrator');
-      navigate(from, { replace: true });
-    } catch (err) {
-      toast.error('Quick admin login failed: ' + err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  const handleFillAdminCredentials = () => {
-    setEmail('admin@univoinfotech.com');
-    setPassword('admin123');
-    toast.success('Admin credentials autofilled!');
-  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-950 px-4 py-8 relative overflow-hidden">
@@ -82,15 +65,6 @@ export const Login = () => {
                   Enter credentials to access the console.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={handleFillAdminCredentials}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition cursor-pointer"
-                title="Fill Master Admin details"
-              >
-                <KeyRound size={12} />
-                <span>Fill Admin</span>
-              </button>
             </div>
 
             <form onSubmit={handleLogin} className="space-y-4">
@@ -146,24 +120,6 @@ export const Login = () => {
                 )}
               </button>
             </form>
-
-            {/* Quick 1-Click Super Admin Access */}
-            <div className="relative my-4 flex items-center justify-center">
-              <div className="border-t border-slate-200 w-full" />
-              <span className="bg-white px-3 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                OR QUICK ACCESS
-              </span>
-            </div>
-
-            <button
-              type="button"
-              disabled={loading}
-              onClick={handleQuickAdminLogin}
-              className="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold shadow-md transition flex items-center justify-center gap-2 cursor-pointer border border-slate-800 disabled:opacity-50"
-            >
-              <Sparkles className="w-4 h-4 text-amber-400" />
-              <span>⚡ 1-Click Direct Super Admin Login</span>
-            </button>
 
             <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-center gap-2 text-xs text-slate-400">
               <ShieldCheck className="w-4 h-4 text-emerald-500" />
