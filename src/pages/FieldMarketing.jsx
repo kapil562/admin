@@ -73,13 +73,12 @@ const LIMIT_OPTIONS = [
   { value: 10, label: '10 Places' },
   { value: 20, label: '20 Places' },
   { value: 30, label: '30 Places' },
-  { value: 40, label: '40 Places' },
   { value: 50, label: '50 Places' },
-  { value: 60, label: '60 Places' },
-  { value: 70, label: '70 Places' },
-  { value: 80, label: '80 Places' },
-  { value: 90, label: '90 Places' },
+  { value: 75, label: '75 Places' },
   { value: 100, label: '100 Places' },
+  { value: 150, label: '150 Places' },
+  { value: 200, label: '200 Places' },
+  { value: 300, label: '300 Places' },
 ];
 
 const DATE_FILTERS = [
@@ -754,14 +753,14 @@ export const FieldMarketing = () => {
                   <input
                     type="number"
                     min="1"
-                    max="100"
-                    value={searchLimit}
+                    max="500"
+                    value={searchLimit || ''}
                     onChange={(e) => {
-                      const val = Math.max(1, Math.min(100, Number(e.target.value) || 1));
+                      const val = Math.max(1, Math.min(500, Number(e.target.value) || 1));
                       setSearchLimit(val);
                     }}
                     onKeyDown={(e) => e.key === 'Enter' && handleManualSearch(e)}
-                    className="w-12 text-xs font-black text-blue-700 outline-none bg-transparent"
+                    className="w-14 text-xs font-black text-blue-700 outline-none bg-transparent"
                     placeholder="qty"
                     autoFocus
                   />

@@ -464,70 +464,96 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
     return true;
   };
 
-  // 1. Direct REST Places API (New) with pagination for up to 100 results and exact radius
+  // 1. Direct REST Places API (New) with pagination and multi-query expansion
   if (apiKey) {
     try {
       const hasSpecificLocation = query.split(/\s+/).length > 2;
-      let allPlaces = [];
-      let pageToken = null;
-      // If maxResults specified, calculate pages; otherwise fetch up to 5 pages (100 results)
-      const targetPages = (maxResults && Number(maxResults) > 0)
-        ? Math.ceil(Math.min(Number(maxResults), 100) / 20)
-        : 5;
+      const isLargeOrUnlimited = !maxResults || Number(maxResults) === 0 || Number(maxResults) > 60;
+      const isGym = query.toLowerCase().includes('gym') || query.toLowerCase().includes('fitness');
 
-      for (let page = 0; page < targetPages; page++) {
-        const body = {
-          textQuery: query,
-          pageSize: 20,
-        };
-
-        if (lat && lng && !hasSpecificLocation) {
-          // If radius specified, use it (clamped to 50km for API); if no radius, bias within 50km
-          const apiBiasRadius = (radius && Number(radius) > 0)
-            ? Math.min(Number(radius), 50000.0)
-            : 50000.0;
-          body.locationBias = {
-            circle: {
-              center: { latitude: lat, longitude: lng },
-              radius: apiBiasRadius,
-            },
-          };
+      // Expand queries to break past Google's single-query 60-result maximum ceiling
+      let queryList = [query];
+      if (isLargeOrUnlimited) {
+        if (isGym) {
+          queryList = [
+            query,
+            'fitness center gym',
+            'health club workout gym',
+            'crossfit fitness gym',
+          ];
+        } else {
+          queryList = [
+            query,
+            'study library reading room',
+            'study point library',
+            'public library pustakalaya',
+          ];
         }
-
-        if (pageToken) {
-          body.pageToken = pageToken;
-        }
-
-        const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Goog-Api-Key': apiKey,
-            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.regularOpeningHours,nextPageToken',
-          },
-          body: JSON.stringify(body),
-        });
-
-        if (!res.ok) break;
-        const data = await res.json();
-        const batch = data.places || [];
-        allPlaces.push(...batch);
-
-        if (!data.nextPageToken || (maxResults && Number(maxResults) > 0 && allPlaces.length >= Number(maxResults))) {
-          break;
-        }
-        pageToken = data.nextPageToken;
-        await new Promise((r) => setTimeout(r, 150));
       }
 
-      if (allPlaces.length > 0) {
-        // Deduplicate places by ID
-        const seenIds = new Set();
-        const uniquePlaces = allPlaces.filter((p) => {
-          if (!p.id || seenIds.has(p.id)) return false;
-          seenIds.add(p.id);
-          return true;
-        });
+      const allPlacesMap = new Map();
+
+      for (const q of queryList) {
+        let pageToken = null;
+        const targetPagesPerQuery = isLargeOrUnlimited ? 3 : Math.ceil(Number(maxResults) / 20);
+
+        for (let page = 0; page < targetPagesPerQuery; page++) {
+          const body = {
+            textQuery: q,
+            pageSize: 20,
+          };
+
+          if (lat && lng && !hasSpecificLocation) {
+            const apiBiasRadius = (radius && Number(radius) > 0)
+              ? Math.min(Number(radius), 50000.0)
+              : 50000.0;
+            body.locationBias = {
+              circle: {
+                center: { latitude: lat, longitude: lng },
+                radius: apiBiasRadius,
+              },
+            };
+          }
+
+          if (pageToken) {
+            body.pageToken = pageToken;
+          }
+
+          const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Goog-Api-Key': apiKey,
+              'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.regularOpeningHours,nextPageToken',
+            },
+            body: JSON.stringify(body),
+          });
+
+          if (!res.ok) break;
+          const data = await res.json();
+          const batch = data.places || [];
+          for (const p of batch) {
+            if (p.id && !allPlacesMap.has(p.id)) {
+              allPlacesMap.set(p.id, p);
+            }
+          }
+
+          if (maxResults && Number(maxResults) > 0 && allPlacesMap.size >= Number(maxResults)) {
+            break;
+          }
+
+          if (!data.nextPageToken) break;
+          pageToken = data.nextPageToken;
+          await new Promise((r) => setTimeout(r, 120));
+        }
+
+        if (maxResults && Number(maxResults) > 0 && allPlacesMap.size >= Number(maxResults)) {
+          break;
+        }
+      }
+
+      if (allPlacesMap.size > 0) {
+        const uniquePlaces = Array.from(allPlacesMap.values());
 
         let formatted = uniquePlaces
           .filter(isRelevantPlace)
