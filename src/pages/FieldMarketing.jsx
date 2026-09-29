@@ -51,7 +51,7 @@ const VISIT_STATUSES = [
 ];
 
 const RADIUS_OPTIONS = [
-  { value: 0, label: '🌐 Any Distance (No km limit)' },
+  { value: 0, label: 'Radius: Default (All)' },
   { value: 5000, label: '5 km Radius' },
   { value: 10000, label: '10 km Radius' },
   { value: 20000, label: '20 km Radius' },
@@ -68,7 +68,7 @@ const RADIUS_OPTIONS = [
 ];
 
 const LIMIT_OPTIONS = [
-  { value: 0, label: '♾️ All Places (No limit)' },
+  { value: 0, label: 'Places: Default (All)' },
   { value: 5, label: '5 Places' },
   { value: 10, label: '10 Places' },
   { value: 20, label: '20 Places' },
@@ -109,9 +109,9 @@ export const FieldMarketing = () => {
   const [nearbyLibraries, setNearbyLibraries] = useState([]);
   const [searchingNearby, setSearchingNearby] = useState(false);
   const [nearbySearchDone, setNearbySearchDone] = useState(false);
-  const [searchRadius, setSearchRadius] = useState(20000);
+  const [searchRadius, setSearchRadius] = useState(0);
   const [customRadiusMode, setCustomRadiusMode] = useState(false);
-  const [searchLimit, setSearchLimit] = useState(40);
+  const [searchLimit, setSearchLimit] = useState(0);
   const [customLimitMode, setCustomLimitMode] = useState(false);
   const [manualSearchQuery, setManualSearchQuery] = useState('');
   const [showDiscovery, setShowDiscovery] = useState(true);
@@ -259,6 +259,10 @@ export const FieldMarketing = () => {
     setManualSearchQuery('');
     setNearbyLibraries([]);
     setNearbySearchDone(false);
+    setSearchRadius(0);
+    setSearchLimit(0);
+    setCustomRadiusMode(false);
+    setCustomLimitMode(false);
   };
 
   const handleManualSearch = (e) => {
