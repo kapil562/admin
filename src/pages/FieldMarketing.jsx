@@ -51,11 +51,18 @@ const VISIT_STATUSES = [
 ];
 
 const RADIUS_OPTIONS = [
-  { value: 2000, label: '2 km' },
-  { value: 5000, label: '5 km' },
-  { value: 10000, label: '10 km' },
-  { value: 25000, label: '25 km' },
-  { value: 50000, label: '50 km' },
+  { value: 2000, label: '2 km Radius' },
+  { value: 5000, label: '5 km Radius' },
+  { value: 10000, label: '10 km Radius' },
+  { value: 25000, label: '25 km Radius' },
+  { value: 50000, label: '50 km Radius' },
+];
+
+const LIMIT_OPTIONS = [
+  { value: 20, label: '20 Places' },
+  { value: 40, label: '40 Places' },
+  { value: 60, label: '60 Places' },
+  { value: 100, label: '100 Places' },
 ];
 
 const DATE_FILTERS = [
@@ -87,6 +94,7 @@ export const FieldMarketing = () => {
   const [searchingNearby, setSearchingNearby] = useState(false);
   const [nearbySearchDone, setNearbySearchDone] = useState(false);
   const [searchRadius, setSearchRadius] = useState(10000);
+  const [searchLimit, setSearchLimit] = useState(60);
   const [manualSearchQuery, setManualSearchQuery] = useState('');
   const [showDiscovery, setShowDiscovery] = useState(true);
 
@@ -182,7 +190,7 @@ export const FieldMarketing = () => {
   const DEFAULT_GUNA_COORDS = { latitude: 24.6465, longitude: 77.3188, accuracy: 100, isFallback: true };
 
   // ── Auto Search Runner ────────────────────────────────────────────────────
-  const performSearch = useCallback(async (loc, category = activeCategory, customQuery = '') => {
+  const performSearch = useCallback(async (loc, category = activeCategory, customQuery = '', radius = searchRadius, limit = searchLimit) => {
     const targetLoc = loc || myLocation || DEFAULT_GUNA_COORDS;
     setSearchingNearby(true);
     try {
@@ -190,7 +198,7 @@ export const FieldMarketing = () => {
       if (!query) {
         query = category === 'gym' ? 'gym fitness center' : 'study library reading room';
       }
-      const res = await searchLibrariesByText(query, targetLoc.latitude, targetLoc.longitude);
+      const res = await searchLibrariesByText(query, targetLoc.latitude, targetLoc.longitude, radius, limit);
       setNearbyLibraries(res || []);
       setNearbySearchDone(true);
     } catch (err) {
@@ -199,7 +207,7 @@ export const FieldMarketing = () => {
     } finally {
       setSearchingNearby(false);
     }
-  }, [activeCategory, myLocation, manualSearchQuery]);
+  }, [activeCategory, myLocation, manualSearchQuery, searchRadius, searchLimit]);
 
   // ── Auto Detect Live Location on Mount (Location detection only, NO auto-search) ──────
   const loadDeviceGPS = useCallback(async (isManual = false) => {
@@ -656,46 +664,69 @@ export const FieldMarketing = () => {
 
         <div className="p-5 space-y-4">
           {/* Search Controls */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            <div className="flex-1">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+            <div className="flex-1 min-w-[200px]">
               <input
                 type="text"
-                placeholder={activeCategory === 'gym' ? "Search gym name or city (e.g. Guna, Indore)..." : "Search library name or city (e.g. Guna, Indore)..."}
+                placeholder={activeCategory === 'gym' ? "Search gym name or city (e.g. Gold Gym, Guna)..." : "Search library name or city (e.g. Study point, Guna)..."}
                 value={manualSearchQuery}
                 onChange={(e) => setManualSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleManualSearch(e)}
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/10"
               />
             </div>
-            <select
-              value={searchRadius}
-              onChange={(e) => {
-                const r = Number(e.target.value);
-                setSearchRadius(r);
-                if (manualSearchQuery.trim()) {
-                  performSearch(myLocation, activeCategory, manualSearchQuery);
-                }
-              }}
-              className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
-            >
-              {RADIUS_OPTIONS.map((r) => (
-                <option key={r.value} value={r.value}>
-                  {r.label} Radius
-                </option>
-              ))}
-            </select>
-            <button
-              onClick={handleManualSearch}
-              disabled={searchingNearby}
-              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50 flex items-center gap-2 shrink-0"
-            >
-              {searchingNearby ? (
-                <Loader2 size={14} className="animate-spin" />
-              ) : (
-                <Search size={14} />
-              )}
-              <span>{searchingNearby ? 'Finding...' : 'Find Nearest'}</span>
-            </button>
+            <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+              <select
+                value={searchRadius}
+                onChange={(e) => {
+                  const r = Number(e.target.value);
+                  setSearchRadius(r);
+                  if (manualSearchQuery.trim()) {
+                    performSearch(myLocation, activeCategory, manualSearchQuery, r, searchLimit);
+                  }
+                }}
+                className="flex-1 sm:flex-none px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                title="Search Radius"
+              >
+                {RADIUS_OPTIONS.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={searchLimit}
+                onChange={(e) => {
+                  const l = Number(e.target.value);
+                  setSearchLimit(l);
+                  if (manualSearchQuery.trim()) {
+                    performSearch(myLocation, activeCategory, manualSearchQuery, searchRadius, l);
+                  }
+                }}
+                className="flex-1 sm:flex-none px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                title="Maximum number of results"
+              >
+                {LIMIT_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                onClick={handleManualSearch}
+                disabled={searchingNearby}
+                className="flex-1 sm:flex-none px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 shrink-0"
+              >
+                {searchingNearby ? (
+                  <Loader2 size={14} className="animate-spin" />
+                ) : (
+                  <Search size={14} />
+                )}
+                <span>{searchingNearby ? 'Searching...' : 'Find Nearest'}</span>
+              </button>
+            </div>
           </div>
 
             {/* Results Grid */}

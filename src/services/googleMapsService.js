@@ -448,12 +448,15 @@ const fallbackPlacesServiceSearch = (lat, lng, radiusMeters) => {
 /**
  * Search libraries by text query (for manual search or specific categories)
  */
-export const searchLibrariesByText = async (query, lat, lng) => {
-  await loadGoogleMaps();
+/**
+ * Search libraries by text query with configurable radius and maxResults limit
+ */
+export const searchLibrariesByText = async (query, lat, lng, radius = 10000, maxResults = 40) => {
+  const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
   // Filter out irrelevant results like toy shops, gift shops
   const isRelevantPlace = (p) => {
-    const name = (p.displayName || p.name || '').toLowerCase();
+    const name = (p.displayName?.text || p.displayName || p.name || '').toLowerCase();
     const address = (p.formattedAddress || p.address || '').toLowerCase();
     if (name.includes('toy world') || name.includes('toy library') || name.includes('khilone') || name.includes('toys')) {
       return false;
@@ -461,10 +464,115 @@ export const searchLibrariesByText = async (query, lat, lng) => {
     return true;
   };
 
-  // Try modern Place API (New) first
+  // 1. Direct REST Places API (New) with pagination for up to 100 results and exact radius
+  if (apiKey) {
+    try {
+      const hasSpecificLocation = query.split(/\s+/).length > 2;
+      let allPlaces = [];
+      let pageToken = null;
+      const targetPages = Math.ceil(Math.min(maxResults, 100) / 20);
+
+      for (let page = 0; page < targetPages; page++) {
+        const body = {
+          textQuery: query,
+          pageSize: 20,
+        };
+
+        if (lat && lng && !hasSpecificLocation) {
+          body.locationBias = {
+            circle: {
+              center: { latitude: lat, longitude: lng },
+              radius: Number(radius) || 10000.0,
+            },
+          };
+        }
+
+        if (pageToken) {
+          body.pageToken = pageToken;
+        }
+
+        const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': apiKey,
+            'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.regularOpeningHours,nextPageToken',
+          },
+          body: JSON.stringify(body),
+        });
+
+        if (!res.ok) break;
+        const data = await res.json();
+        const batch = data.places || [];
+        allPlaces.push(...batch);
+
+        if (!data.nextPageToken || allPlaces.length >= maxResults) {
+          break;
+        }
+        pageToken = data.nextPageToken;
+        await new Promise((r) => setTimeout(r, 150));
+      }
+
+      if (allPlaces.length > 0) {
+        // Deduplicate places by ID
+        const seenIds = new Set();
+        const uniquePlaces = allPlaces.filter((p) => {
+          if (!p.id || seenIds.has(p.id)) return false;
+          seenIds.add(p.id);
+          return true;
+        });
+
+        let formatted = uniquePlaces
+          .filter(isRelevantPlace)
+          .map((p) => {
+            const placeLat = p.location?.latitude;
+            const placeLng = p.location?.longitude;
+            const distance = (lat && lng && placeLat != null && placeLng != null)
+              ? calculateDistance(lat, lng, placeLat, placeLng)
+              : null;
+
+            return {
+              placeId: p.id,
+              name: p.displayName?.text || p.displayName || '',
+              address: p.formattedAddress || '',
+              rating: p.rating || null,
+              totalRatings: p.userRatingCount || 0,
+              lat: placeLat,
+              lng: placeLng,
+              distance,
+              distanceFormatted: formatDistance(distance),
+              isOpen: p.regularOpeningHours?.openNow ?? null,
+            };
+          });
+
+        // Strictly apply radius filter if coordinates are available
+        if (lat && lng && radius) {
+          const maxDistanceWithTolerance = Number(radius) * 1.15;
+          formatted = formatted.filter((p) => p.distance == null || p.distance <= maxDistanceWithTolerance);
+        }
+
+        // Limit to maxResults requested
+        if (formatted.length > maxResults) {
+          formatted = formatted.slice(0, maxResults);
+        }
+
+        if (lat && lng) {
+          formatted.sort((a, b) => (a.distance ?? 999999) - (b.distance ?? 999999));
+          const enriched = await enrichWithRealRoadDistances(lat, lng, formatted);
+          return enriched;
+        }
+        return formatted;
+      }
+    } catch (restErr) {
+      console.warn('Direct Places REST error, fallback to JS SDK:', restErr);
+    }
+  }
+
+  // 2. Fallback to Google Maps JS SDK
+  await loadGoogleMaps();
+
   if (typeof google?.maps?.places?.Place?.searchByText === 'function') {
     try {
-      // Check if user is searching for a specific city/location
       const hasSpecificLocation = query.split(/\s+/).length > 2;
 
       const { places } = await google.maps.places.Place.searchByText({
@@ -472,13 +580,13 @@ export const searchLibrariesByText = async (query, lat, lng) => {
         fields: ['id', 'displayName', 'formattedAddress', 'location', 'rating', 'userRatingCount', 'regularOpeningHours'],
         locationBias: (lat && lng && !hasSpecificLocation) ? {
           center: { lat, lng },
-          radius: 50000,
+          radius: Number(radius) || 10000,
         } : undefined,
-        maxResultCount: 20,
+        maxResultCount: Math.min(maxResults, 20),
       });
 
       if (places && Array.isArray(places)) {
-        const formatted = places
+        let formatted = places
           .filter(isRelevantPlace)
           .map((p) => {
             const placeLat = typeof p.location?.lat === 'function' ? p.location.lat() : p.location?.lat;
@@ -499,6 +607,10 @@ export const searchLibrariesByText = async (query, lat, lng) => {
             };
           });
 
+        if (lat && lng && radius) {
+          formatted = formatted.filter((p) => p.distance == null || p.distance <= Number(radius) * 1.15);
+        }
+
         if (lat && lng) {
           formatted.sort((a, b) => (a.distance ?? 999999) - (b.distance ?? 999999));
           const enriched = await enrichWithRealRoadDistances(lat, lng, formatted);
@@ -511,7 +623,7 @@ export const searchLibrariesByText = async (query, lat, lng) => {
     }
   }
 
-  // Fallback to legacy textSearch
+  // 3. Fallback to legacy textSearch
   return new Promise((resolve) => {
     let mapDiv = document.getElementById('google-maps-hidden');
     if (!mapDiv) {
@@ -532,11 +644,11 @@ export const searchLibrariesByText = async (query, lat, lng) => {
       {
         query,
         location: new google.maps.LatLng(lat, lng),
-        radius: 50000,
+        radius: Number(radius) || 10000,
       },
       (results, status) => {
         if (status === google.maps.places.PlacesServiceStatus.OK && results) {
-          const formatted = results
+          let formatted = results
             .filter((p) => {
               const name = (p.name || '').toLowerCase();
               return !name.includes('toy world') && !name.includes('toy library') && !name.includes('khilone');
@@ -560,6 +672,10 @@ export const searchLibrariesByText = async (query, lat, lng) => {
                 types: place.types || [],
               };
             });
+
+          if (lat && lng && radius) {
+            formatted = formatted.filter((p) => p.distance == null || p.distance <= Number(radius) * 1.15);
+          }
 
           formatted.sort((a, b) => a.distance - b.distance);
           if (lat && lng) {
