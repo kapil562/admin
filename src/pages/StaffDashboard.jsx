@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
-import { getFieldVisits, logFieldVisit, getCurrentGPSLocation, getAttendanceLogs, punchAttendance } from '../firebase/services/marketingService';
+import { getFieldVisits, logFieldVisit, getCurrentGPSLocation, getAttendanceLogs, punchAttendance, updateVisitStatus } from '../firebase/services/marketingService';
 import { calculateStaffPayroll, getStaffUsers } from '../firebase/services/staffService';
 import { getSoftwareVerticals } from '../firebase/services/verticalService';
+import { searchNearbyLibraries, formatDistance, getNavigationUrl } from '../services/googleMapsService';
 import { StatCard } from '../components/ui/StatCard';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
@@ -25,8 +26,17 @@ import {
   Building2,
   Check,
   Phone,
+  MessageCircle, 
+  Compass, 
+  Search, 
+  Star, 
+  AlertTriangle, 
+  PhoneCall, 
+  Edit3
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+
+const VISIT_STATUSES = ['Interested', 'Demo Given', 'Follow Up', 'Deal Closed', 'Not Interested'];
 
 export const StaffDashboard = () => {
   const { user } = useAuth();
@@ -36,6 +46,7 @@ export const StaffDashboard = () => {
   const [showVisitModal, setShowVisitModal] = useState(false);
   const [capturingGps, setCapturingGps] = useState(false);
   const [gpsData, setGpsData] = useState(null);
+  const [statusDropdownId, setStatusDropdownId] = useState(null);
 
   // Form State for logging visit
   const [form, setForm] = useState({
@@ -53,6 +64,9 @@ export const StaffDashboard = () => {
     checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
     checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
     durationMinutes: 20,
+    placeId: '',
+    placeName: '',
+    placeAddress: ''
   });
 
   // 1. Fetch Staff info for compensation details
@@ -100,24 +114,60 @@ export const StaffDashboard = () => {
     },
   });
 
-  const resetVisitForm = () => {
-    setForm({
-      clientType: activeVerticals.length === 1 ? activeVerticals[0].shortName : 'Library',
-      businessName: '',
-      ownerName: '',
-      phone: '',
-      state: '',
-      city: '',
-      address: '',
-      discussionNotes: '',
-      demoGiven: false,
-      status: 'Interested',
-      followUpDate: '',
-      checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      durationMinutes: 20,
-    });
+  // 7. Update Visit Status Mutation
+  const updateStatusMutation = useMutation({
+    mutationFn: updateVisitStatus,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin_field_visits'] });
+      toast.success('Status updated successfully');
+    },
+  });
+
+  const resetVisitForm = (prefill = null) => {
+    if (prefill) {
+      setForm({
+        ...form,
+        businessName: prefill.businessName || '',
+        ownerName: prefill.ownerName || '',
+        phone: prefill.phone || '',
+        state: prefill.state || '',
+        city: prefill.city || '',
+        address: prefill.address || '',
+        placeId: prefill.placeId || '',
+        placeName: prefill.placeName || '',
+        placeAddress: prefill.placeAddress || '',
+      });
+    } else {
+      setForm({
+        clientType: activeVerticals.length === 1 ? activeVerticals[0].shortName : 'Library',
+        businessName: '',
+        ownerName: '',
+        phone: '',
+        state: '',
+        city: '',
+        address: '',
+        discussionNotes: '',
+        demoGiven: false,
+        status: 'Interested',
+        followUpDate: '',
+        checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+        checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+        durationMinutes: 20,
+        placeId: '',
+        placeName: '',
+        placeAddress: ''
+      });
+    }
     setGpsData(null);
+  };
+
+  const openVisitModal = (prefill = null) => {
+    resetVisitForm(prefill);
+    setShowVisitModal(true);
+    getCurrentGPSLocation().then(loc => {
+      setGpsData(loc);
+      toast.success(`GPS Auto-locked (±${loc.accuracy}m)`);
+    }).catch(() => {});
   };
 
   const handleCaptureGPS = async () => {
@@ -171,6 +221,11 @@ export const StaffDashboard = () => {
     });
   };
 
+  const handleStatusChange = (id, newStatus) => {
+    updateStatusMutation.mutate({ id, status: newStatus });
+    setStatusDropdownId(null);
+  };
+
   // Calculations for current staff
   const payroll = calculateStaffPayroll(staffData, allVisits);
   const myVisits = allVisits.filter(
@@ -183,6 +238,8 @@ export const StaffDashboard = () => {
   );
 
   const myFollowups = myVisits.filter((v) => v.status === 'Follow Up' && v.followUpDate);
+  const dueFollowups = myFollowups.filter((v) => v.followUpDate <= todayStr);
+  const overdueFollowups = dueFollowups.filter((v) => v.followUpDate < todayStr);
 
   const formatCurrency = (amt) => {
     return new Intl.NumberFormat('en-IN', {
@@ -241,10 +298,7 @@ export const StaffDashboard = () => {
 
             {/* Log Visit Button */}
             <button
-              onClick={() => {
-                resetVisitForm();
-                setShowVisitModal(true);
-              }}
+              onClick={() => openVisitModal()}
               className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-lg shadow-blue-600/25 transition flex items-center gap-2 cursor-pointer"
             >
               <Plus size={16} />
@@ -253,6 +307,59 @@ export const StaffDashboard = () => {
           </div>
         </div>
       </div>
+
+      {/* Today's Follow-up Alert Banner */}
+      {dueFollowups.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 shadow-sm">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 bg-amber-100 text-amber-700 rounded-lg">
+              <AlertTriangle size={20} />
+            </div>
+            <div>
+              <h3 className="font-bold text-amber-900 text-sm">
+                📞 You have {dueFollowups.length} follow-up callbacks due ({overdueFollowups.length} overdue)
+              </h3>
+              <p className="text-xs text-amber-700">Please reach out to these clients today.</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {dueFollowups.map((f) => (
+              <div key={f.id} className="bg-white rounded-xl p-4 border border-amber-100 shadow-sm flex flex-col justify-between">
+                <div>
+                  <div className="flex items-start justify-between gap-2">
+                    <h4 className="font-bold text-slate-800 text-sm truncate">{f.businessName}</h4>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${f.followUpDate < todayStr ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
+                      {f.followUpDate}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-600 mt-1 font-medium">{f.ownerName}</div>
+                  {f.phone && (
+                    <div className="flex items-center gap-2 mt-2">
+                      <a href={`tel:${f.phone}`} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-medium hover:bg-blue-100 transition">
+                        <PhoneCall size={12} /> Call
+                      </a>
+                      <a href={`https://wa.me/91${f.phone.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-medium hover:bg-emerald-100 transition">
+                        <MessageCircle size={12} /> WhatsApp
+                      </a>
+                    </div>
+                  )}
+                  {f.discussionNotes && (
+                    <p className="text-[11px] text-slate-500 mt-3 line-clamp-2 italic border-l-2 border-amber-200 pl-2">
+                      "{f.discussionNotes.substring(0, 80)}{f.discussionNotes.length > 80 ? '...' : ''}"
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={() => openVisitModal(f)}
+                  className="mt-4 w-full py-2 bg-amber-100 hover:bg-amber-200 text-amber-800 text-xs font-bold rounded-lg transition flex items-center justify-center gap-2"
+                >
+                  <Edit3 size={14} /> Re-Visit / Update
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Salary & Earnings Wallet Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -347,7 +454,17 @@ export const StaffDashboard = () => {
                       </td>
                       <td className="px-5 py-3.5">
                         <span className="font-semibold text-slate-700">{v.ownerName}</span>
-                        <span className="block text-slate-400 text-[10px]">{v.phone}</span>
+                        {v.phone && (
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <a href={`tel:${v.phone}`} className="text-blue-600 hover:text-blue-800" title="Call">
+                              <PhoneCall size={11} />
+                            </a>
+                            <a href={`https://wa.me/91${v.phone.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-800" title="WhatsApp">
+                              <MessageCircle size={11} />
+                            </a>
+                            <span className="text-[10px] text-slate-400">{v.phone}</span>
+                          </div>
+                        )}
                       </td>
                       <td className="px-5 py-3.5">
                         {v.location ? (
@@ -364,19 +481,37 @@ export const StaffDashboard = () => {
                           <span className="text-slate-400">-</span>
                         )}
                       </td>
-                      <td className="px-5 py-3.5 text-right">
-                        <Badge
-                          variant={
-                            v.status === 'Deal Closed'
-                              ? 'success'
-                              : v.status === 'Follow Up'
-                              ? 'warning'
-                              : 'info'
-                          }
-                          size="sm"
+                      <td className="px-5 py-3.5 text-right relative">
+                        <button
+                          onClick={() => setStatusDropdownId(statusDropdownId === v.id ? null : v.id)}
+                          className="focus:outline-none"
                         >
-                          {v.status}
-                        </Badge>
+                          <Badge
+                            variant={
+                              v.status === 'Deal Closed'
+                                ? 'success'
+                                : v.status === 'Follow Up'
+                                ? 'warning'
+                                : 'info'
+                            }
+                            size="sm"
+                          >
+                            {v.status}
+                          </Badge>
+                        </button>
+                        {statusDropdownId === v.id && (
+                          <div className="absolute right-5 top-10 mt-1 w-36 bg-white border border-slate-200 shadow-lg rounded-xl z-10 py-1 flex flex-col text-left">
+                            {VISIT_STATUSES.map(st => (
+                              <button
+                                key={st}
+                                onClick={() => handleStatusChange(v.id, st)}
+                                className={`px-4 py-2 text-xs text-left hover:bg-slate-50 transition ${v.status === st ? 'font-bold text-blue-600 bg-blue-50/50' : 'text-slate-700'}`}
+                              >
+                                {st}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))
@@ -409,13 +544,25 @@ export const StaffDashboard = () => {
                     <p className="font-bold text-slate-900 text-xs truncate max-w-[160px]">
                       {f.businessName}
                     </p>
-                    <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${f.followUpDate < todayStr ? 'bg-rose-100 text-rose-700' : 'bg-amber-50 text-amber-700'}`}>
                       {f.followUpDate}
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 flex items-center gap-1">
-                    <Phone size={11} /> {f.ownerName} ({f.phone})
-                  </p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] text-slate-500 flex items-center gap-1">
+                      <Phone size={11} /> {f.ownerName} ({f.phone})
+                    </p>
+                    {f.phone && (
+                      <div className="flex items-center gap-1.5">
+                        <a href={`tel:${f.phone}`} className="text-blue-600 hover:text-blue-800" title="Call">
+                          <PhoneCall size={12} />
+                        </a>
+                        <a href={`https://wa.me/91${f.phone.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-800" title="WhatsApp">
+                          <MessageCircle size={12} />
+                        </a>
+                      </div>
+                    )}
+                  </div>
                 </div>
               ))
             ) : (
@@ -643,3 +790,4 @@ export const StaffDashboard = () => {
     </div>
   );
 };
+

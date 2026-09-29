@@ -62,7 +62,7 @@ export const logFieldVisit = async (visitData) => {
   const cleaned = {
     staffId: visitData.staffId || 'admin',
     staffName: visitData.staffName || 'Administrator',
-    clientType: visitData.clientType || 'Library', // 'Library' | 'Gym' | 'Coaching' | 'Other'
+    clientType: visitData.clientType || 'Library',
     businessName: visitData.businessName.trim(),
     ownerName: visitData.ownerName ? visitData.ownerName.trim() : 'Owner',
     phone: visitData.phone ? visitData.phone.trim() : '',
@@ -71,17 +71,65 @@ export const logFieldVisit = async (visitData) => {
     address: visitData.address ? visitData.address.trim() : '',
     discussionNotes: visitData.discussionNotes ? visitData.discussionNotes.trim() : '',
     demoGiven: Boolean(visitData.demoGiven),
-    status: visitData.status || 'Interested', // 'Interested' | 'Demo Given' | 'Follow Up' | 'Deal Closed' | 'Not Interested'
+    status: visitData.status || 'Interested',
     followUpDate: visitData.followUpDate || '',
-    location: visitData.location || null, // { latitude, longitude, accuracy, mapsUrl }
+    location: visitData.location || null,
     checkInTime: visitData.checkInTime || new Date().toISOString(),
     checkOutTime: visitData.checkOutTime || new Date().toISOString(),
     durationMinutes: Number(visitData.durationMinutes) || 0,
+    // Google Place linking fields
+    placeId: visitData.placeId || null,
+    placeName: visitData.placeName ? visitData.placeName.trim() : '',
+    placeAddress: visitData.placeAddress ? visitData.placeAddress.trim() : '',
+    placeRating: visitData.placeRating || null,
+    placeLat: visitData.placeLat || null,
+    placeLng: visitData.placeLng || null,
     createdAt: new Date().toISOString(),
   };
 
   const ref = await addDoc(collection(univoDb, 'field_visits'), cleaned);
   return { id: ref.id, ...cleaned };
+};
+
+/**
+ * Update an existing field visit record
+ */
+export const updateFieldVisit = async (id, visitData) => {
+  const cleaned = {};
+
+  // Only include fields that are provided
+  if (visitData.businessName !== undefined) cleaned.businessName = visitData.businessName.trim();
+  if (visitData.ownerName !== undefined) cleaned.ownerName = visitData.ownerName.trim();
+  if (visitData.phone !== undefined) cleaned.phone = visitData.phone.trim();
+  if (visitData.state !== undefined) cleaned.state = visitData.state.trim();
+  if (visitData.city !== undefined) cleaned.city = visitData.city.trim();
+  if (visitData.address !== undefined) cleaned.address = visitData.address.trim();
+  if (visitData.discussionNotes !== undefined) cleaned.discussionNotes = visitData.discussionNotes.trim();
+  if (visitData.demoGiven !== undefined) cleaned.demoGiven = Boolean(visitData.demoGiven);
+  if (visitData.status !== undefined) cleaned.status = visitData.status;
+  if (visitData.followUpDate !== undefined) cleaned.followUpDate = visitData.followUpDate;
+  if (visitData.clientType !== undefined) cleaned.clientType = visitData.clientType;
+  if (visitData.checkInTime !== undefined) cleaned.checkInTime = visitData.checkInTime;
+  if (visitData.checkOutTime !== undefined) cleaned.checkOutTime = visitData.checkOutTime;
+  if (visitData.durationMinutes !== undefined) cleaned.durationMinutes = Number(visitData.durationMinutes);
+  if (visitData.location !== undefined) cleaned.location = visitData.location;
+
+  cleaned.updatedAt = new Date().toISOString();
+
+  await updateDoc(doc(univoDb, 'field_visits', id), cleaned);
+  return { id, ...cleaned };
+};
+
+/**
+ * Quick inline status update for a visit
+ */
+export const updateVisitStatus = async (id, newStatus) => {
+  const updateData = {
+    status: newStatus,
+    updatedAt: new Date().toISOString(),
+  };
+  await updateDoc(doc(univoDb, 'field_visits', id), updateData);
+  return { id, ...updateData };
 };
 
 export const deleteFieldVisit = async (id) => {

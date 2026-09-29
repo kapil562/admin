@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getFieldVisits, logFieldVisit, deleteFieldVisit, getCurrentGPSLocation } from '../firebase/services/marketingService';
+import { getFieldVisits, logFieldVisit, updateFieldVisit, updateVisitStatus, deleteFieldVisit, getCurrentGPSLocation } from '../firebase/services/marketingService';
 import { getStaffUsers } from '../firebase/services/staffService';
+import { searchNearbyLibraries, searchLibrariesByText, formatDistance, getNavigationUrl, getPlaceMapUrl, geocodeAddress, reverseGeocode, parseAddressDetails, getPlaceDetails } from '../services/googleMapsService';
 import { useAuth } from '../context/AuthContext';
 import { PageHeader } from '../components/ui/PageHeader';
 import { StatCard } from '../components/ui/StatCard';
@@ -14,26 +15,30 @@ import {
   Navigation,
   MapPin,
   Building2,
-  Dumbbell,
-  GraduationCap,
-  Store,
   Phone,
-  User,
   Calendar,
-  Clock,
   CheckCircle2,
   AlertCircle,
   Plus,
   ExternalLink,
   Trash2,
   Crosshair,
-  Timer,
   Check,
   Users,
-  UserCheck,
-  Filter,
-  Award,
-  Sparkles,
+  Compass,
+  Search,
+  Star,
+  MessageCircle,
+  PhoneCall,
+  ChevronDown,
+  Edit3,
+  RotateCcw,
+  Download,
+  Clock,
+  AlertTriangle,
+  ArrowRight,
+  Loader2,
+  X,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -45,30 +50,53 @@ const VISIT_STATUSES = [
   { id: 'Not Interested', label: 'Not Interested', variant: 'danger' },
 ];
 
+const RADIUS_OPTIONS = [
+  { value: 2000, label: '2 km' },
+  { value: 5000, label: '5 km' },
+  { value: 10000, label: '10 km' },
+  { value: 25000, label: '25 km' },
+  { value: 50000, label: '50 km' },
+];
+
+const DATE_FILTERS = [
+  { id: 'all', label: 'All Time' },
+  { id: 'today', label: 'Today' },
+  { id: 'week', label: 'This Week' },
+  { id: 'month', label: 'This Month' },
+];
+
 export const FieldMarketing = () => {
   const { user, hasPermission } = useAuth();
   const queryClient = useQueryClient();
 
+  // Core state
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
+  const [dateFilter, setDateFilter] = useState('all');
   const [selectedStaffFilter, setSelectedStaffFilter] = useState('All');
   const [showModal, setShowModal] = useState(false);
+  const [editingVisit, setEditingVisit] = useState(null);
   const [selectedVisit, setSelectedVisit] = useState(null);
+  const [statusDropdownId, setStatusDropdownId] = useState(null);
+
+  // Nearby discovery state
+  const [myLocation, setMyLocation] = useState(null);
+  const [currentLocationName, setCurrentLocationName] = useState('Detecting your GPS location...');
+  const [activeCategory, setActiveCategory] = useState('library'); // 'library' | 'gym'
+  const [nearbyLibraries, setNearbyLibraries] = useState([]);
+  const [searchingNearby, setSearchingNearby] = useState(false);
+  const [nearbySearchDone, setNearbySearchDone] = useState(false);
+  const [searchRadius, setSearchRadius] = useState(10000);
+  const [manualSearchQuery, setManualSearchQuery] = useState('');
+  const [showDiscovery, setShowDiscovery] = useState(true);
 
   const isSuperAdmin = user?.role === 'super_admin';
 
-  // 1. Fetch Staff Users (for Admin filter & performance cards)
-  const { data: staffList = [] } = useQuery({
-    queryKey: ['admin_staff_users'],
-    queryFn: getStaffUsers,
-    enabled: isSuperAdmin,
-  });
-
-  // GPS State
+  // GPS state
   const [capturingGps, setCapturingGps] = useState(false);
   const [gpsData, setGpsData] = useState(null);
 
-  // Form State - Focused 100% on Library
+  // Form state
   const [form, setForm] = useState({
     clientType: 'Library',
     businessName: '',
@@ -84,29 +112,64 @@ export const FieldMarketing = () => {
     checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
     checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
     durationMinutes: 20,
+    placeId: null,
+    placeName: '',
+    placeAddress: '',
+    placeRating: null,
+    placeLat: null,
+    placeLng: null,
   });
 
-  // 2. Fetch Visits
+  // Fetch staff users (admin only)
+  const { data: staffList = [] } = useQuery({
+    queryKey: ['admin_staff_users'],
+    queryFn: getStaffUsers,
+    enabled: isSuperAdmin,
+  });
+
+  // Fetch visits
   const { data: visits = [], isLoading } = useQuery({
     queryKey: ['admin_field_visits'],
     queryFn: getFieldVisits,
   });
 
-  // 3. Add Mutation
+  // Add mutation
   const addMutation = useMutation({
     mutationFn: logFieldVisit,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin_field_visits'] });
-      toast.success('Field visit log recorded with GPS!');
+      toast.success('Field visit logged with GPS! ✅');
       setShowModal(false);
+      setEditingVisit(null);
       resetForm();
     },
-    onError: (err) => {
-      toast.error(err.message || 'Failed to save visit record');
+    onError: (err) => toast.error(err.message || 'Failed to save visit'),
+  });
+
+  // Edit mutation
+  const editMutation = useMutation({
+    mutationFn: ({ id, data }) => updateFieldVisit(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin_field_visits'] });
+      toast.success('Visit updated! ✅');
+      setShowModal(false);
+      setEditingVisit(null);
+      resetForm();
+    },
+    onError: (err) => toast.error(err.message || 'Failed to update visit'),
+  });
+
+  // Status mutation
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }) => updateVisitStatus(id, status),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin_field_visits'] });
+      toast.success('Status updated!');
+      setStatusDropdownId(null);
     },
   });
 
-  // 4. Delete Mutation
+  // Delete mutation
   const deleteMutation = useMutation({
     mutationFn: deleteFieldVisit,
     onSuccess: () => {
@@ -115,6 +178,63 @@ export const FieldMarketing = () => {
     },
   });
 
+  // ── Auto Search Runner ────────────────────────────────────────────────────
+  const performSearch = useCallback(async (loc, category = activeCategory, customQuery = manualSearchQuery) => {
+    if (!loc) return;
+    setSearchingNearby(true);
+    try {
+      let query = customQuery.trim();
+      if (!query) {
+        query = category === 'gym' ? 'gym fitness center' : 'study library reading room';
+      }
+      const res = await searchLibrariesByText(query, loc.latitude, loc.longitude);
+      setNearbyLibraries(res);
+      setNearbySearchDone(true);
+    } catch (err) {
+      console.error('Search error:', err);
+      toast.error(err.message || 'Failed to find nearest places');
+    } finally {
+      setSearchingNearby(false);
+    }
+  }, [activeCategory, manualSearchQuery]);
+
+  // ── Auto Detect Live Location on Mount ────────────────────────────────────
+  const loadDeviceGPS = useCallback(async () => {
+    try {
+      const loc = await getCurrentGPSLocation();
+      setMyLocation(loc);
+      const rev = await reverseGeocode(loc.latitude, loc.longitude);
+      const locName = rev.cityName || rev.formattedAddress || 'Your Live Location';
+      setCurrentLocationName(locName);
+      performSearch(loc, activeCategory, '');
+    } catch (err) {
+      console.warn('GPS detection:', err);
+      setCurrentLocationName('GPS permission needed (check browser settings)');
+      toast.error('Please allow location permission in browser to auto-find nearest places');
+    }
+  }, [activeCategory, performSearch]);
+
+  useEffect(() => {
+    loadDeviceGPS();
+  }, [loadDeviceGPS]);
+
+  const handleCategorySwitch = (cat) => {
+    setActiveCategory(cat);
+    setManualSearchQuery('');
+    if (myLocation) {
+      performSearch(myLocation, cat, '');
+    }
+  };
+
+  const handleManualSearch = () => {
+    if (!myLocation) {
+      loadDeviceGPS();
+      return;
+    }
+    performSearch(myLocation, activeCategory, manualSearchQuery);
+  };
+
+  // ── Form helpers ───────────────────────────────────────────────────────────
   const resetForm = () => {
     setForm({
       clientType: 'Library',
@@ -131,8 +251,128 @@ export const FieldMarketing = () => {
       checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
       checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
       durationMinutes: 20,
+      placeId: null,
+      placeName: '',
+      placeAddress: '',
+      placeRating: null,
+      placeLat: null,
+      placeLng: null,
     });
     setGpsData(null);
+  };
+
+  const openLogVisitFromPlace = async (place) => {
+    setEditingVisit(null);
+
+    // 1. Immediately parse city, state, and area from place.address
+    const parsed = parseAddressDetails(place.address || '');
+
+    setForm({
+      clientType: activeCategory === 'gym' ? 'Gym' : 'Library',
+      businessName: place.name || '',
+      ownerName: '',
+      phone: place.phone || '',
+      state: parsed.state || '',
+      city: parsed.city || '',
+      address: parsed.area || place.address || '',
+      discussionNotes: '',
+      demoGiven: false,
+      status: 'Interested',
+      followUpDate: '',
+      checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+      checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+      durationMinutes: 20,
+      placeId: place.placeId,
+      placeName: place.name || '',
+      placeAddress: place.address || '',
+      placeRating: place.rating,
+      placeLat: place.lat,
+      placeLng: place.lng,
+    });
+    setShowModal(true);
+
+    // 2. Auto GPS lock
+    getCurrentGPSLocation().then((loc) => {
+      setGpsData(loc);
+    }).catch(() => {});
+
+    // 3. Fetch phone number and detailed components from Google Places
+    if (place.placeId) {
+      getPlaceDetails(place.placeId)
+        .then((details) => {
+          if (details) {
+            setForm((prev) => ({
+              ...prev,
+              phone: prev.phone || details.phone || '',
+              city: prev.city || details.city || '',
+              state: prev.state || details.state || '',
+            }));
+            if (details.phone) {
+              toast.success(`Contact phone auto-filled: ${details.phone}`, { icon: '📞' });
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  };
+
+  const openReVisit = (visit) => {
+    setEditingVisit(null);
+    setForm({
+      clientType: visit.clientType || 'Library',
+      businessName: visit.businessName || '',
+      ownerName: visit.ownerName || '',
+      phone: visit.phone || '',
+      state: visit.state || '',
+      city: visit.city || '',
+      address: visit.address || '',
+      discussionNotes: '',
+      demoGiven: false,
+      status: 'Follow Up',
+      followUpDate: '',
+      checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+      checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+      durationMinutes: 20,
+      placeId: visit.placeId || null,
+      placeName: visit.placeName || visit.businessName || '',
+      placeAddress: visit.placeAddress || visit.address || '',
+      placeRating: visit.placeRating || null,
+      placeLat: visit.placeLat || null,
+      placeLng: visit.placeLng || null,
+    });
+    setShowModal(true);
+    getCurrentGPSLocation().then((loc) => {
+      setGpsData(loc);
+      toast.success(`GPS Auto-locked (±${loc.accuracy}m)`);
+    }).catch(() => {});
+  };
+
+  const openEditVisit = (visit) => {
+    setEditingVisit(visit);
+    setForm({
+      clientType: visit.clientType || 'Library',
+      businessName: visit.businessName || '',
+      ownerName: visit.ownerName || '',
+      phone: visit.phone || '',
+      state: visit.state || '',
+      city: visit.city || '',
+      address: visit.address || '',
+      discussionNotes: visit.discussionNotes || '',
+      demoGiven: visit.demoGiven || false,
+      status: visit.status || 'Interested',
+      followUpDate: visit.followUpDate || '',
+      checkInTime: visit.checkInTime || '',
+      checkOutTime: visit.checkOutTime || '',
+      durationMinutes: visit.durationMinutes || 20,
+      placeId: visit.placeId || null,
+      placeName: visit.placeName || '',
+      placeAddress: visit.placeAddress || '',
+      placeRating: visit.placeRating || null,
+      placeLat: visit.placeLat || null,
+      placeLng: visit.placeLng || null,
+    });
+    setGpsData(visit.location || null);
+    setShowModal(true);
   };
 
   const handleCaptureGPS = async () => {
@@ -140,7 +380,7 @@ export const FieldMarketing = () => {
     try {
       const loc = await getCurrentGPSLocation();
       setGpsData(loc);
-      toast.success(`GPS Acquired: Accurate to ±${loc.accuracy}m`);
+      toast.success(`GPS Acquired: ±${loc.accuracy}m`);
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -155,17 +395,19 @@ export const FieldMarketing = () => {
       return;
     }
 
-    addMutation.mutate({
-      ...form,
-      staffId: user?.uid || user?.id || 'staff',
-      staffName: user?.displayName || user?.name || 'Marketing Staff',
-      location: gpsData,
-    });
+    if (editingVisit) {
+      editMutation.mutate({ id: editingVisit.id, data: { ...form, location: gpsData } });
+    } else {
+      addMutation.mutate({
+        ...form,
+        staffId: user?.uid || user?.id || 'staff',
+        staffName: user?.displayName || user?.name || 'Marketing Staff',
+        location: gpsData,
+      });
+    }
   };
 
-  // Base visits filtered by role:
-  // - If staff member: strictly their own visits!
-  // - If super admin: filtered by selectedStaffFilter (or all)
+  // ── Filtering logic ────────────────────────────────────────────────────────
   const baseVisits = useMemo(() => {
     if (isSuperAdmin) {
       if (selectedStaffFilter === 'All') return visits;
@@ -178,7 +420,6 @@ export const FieldMarketing = () => {
         );
       });
     }
-    // Staff Member: strictly their own visits!
     const myId = user?.uid || user?.id;
     const myName = (user?.displayName || user?.name || '').toLowerCase();
     return visits.filter(
@@ -186,8 +427,12 @@ export const FieldMarketing = () => {
     );
   }, [visits, isSuperAdmin, selectedStaffFilter, user, staffList]);
 
-  // Filter logic on top of baseVisits
   const filteredVisits = useMemo(() => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const weekAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).toISOString();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+
     return baseVisits.filter((v) => {
       const matchSearch =
         (v.businessName || '').toLowerCase().includes(search.toLowerCase()) ||
@@ -198,24 +443,61 @@ export const FieldMarketing = () => {
         (v.discussionNotes || '').toLowerCase().includes(search.toLowerCase());
 
       const matchStatus = statusFilter === 'All' || v.status === statusFilter;
-      return matchSearch && matchStatus;
-    });
-  }, [baseVisits, search, statusFilter]);
 
-  // Aggregated Stats
+      let matchDate = true;
+      if (dateFilter === 'today') {
+        matchDate = (v.createdAt || '').startsWith(todayStr);
+      } else if (dateFilter === 'week') {
+        matchDate = v.createdAt >= weekAgo;
+      } else if (dateFilter === 'month') {
+        matchDate = v.createdAt >= monthStart;
+      }
+
+      return matchSearch && matchStatus && matchDate;
+    });
+  }, [baseVisits, search, statusFilter, dateFilter]);
+
+  // Stats
   const totalVisitsCount = baseVisits.length;
   const demosGivenCount = baseVisits.filter((v) => v.demoGiven).length;
   const dealsClosedCount = baseVisits.filter((v) => v.status === 'Deal Closed').length;
   const followUpsCount = baseVisits.filter((v) => v.status === 'Follow Up').length;
 
+  // Today's follow-ups + overdue
+  const todayStr = new Date().toISOString().split('T')[0];
+  const dueFollowUps = useMemo(() => {
+    return baseVisits.filter(
+      (v) => v.status === 'Follow Up' && v.followUpDate && v.followUpDate <= todayStr
+    );
+  }, [baseVisits, todayStr]);
+  const overdueCount = dueFollowUps.filter((v) => v.followUpDate < todayStr).length;
+
+  // Get visit history for a place
+  const getPlaceVisitHistory = useCallback(
+    (placeId) => {
+      if (!placeId) return [];
+      return visits.filter((v) => v.placeId === placeId).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    },
+    [visits]
+  );
+
+  // Visit count per place
+  const getVisitNumber = useCallback(
+    (visit) => {
+      if (!visit.placeId) return null;
+      const placeVisits = visits
+        .filter((v) => v.placeId === visit.placeId)
+        .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+      const idx = placeVisits.findIndex((v) => v.id === visit.id);
+      return idx >= 0 ? idx + 1 : null;
+    },
+    [visits]
+  );
+
   const formatDate = (dateStr) => {
     if (!dateStr) return '-';
     try {
-      return new Date(dateStr).toLocaleDateString('en-IN', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-      });
+      return new Date(dateStr).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
     } catch {
       return dateStr;
     }
@@ -226,8 +508,46 @@ export const FieldMarketing = () => {
     return found ? found.variant : 'neutral';
   };
 
+  // CSV Export
+  const handleExportCSV = () => {
+    const headers = ['Date', 'Business', 'Owner', 'Phone', 'City', 'State', 'Staff', 'Status', 'Demo', 'Discussion', 'GPS Link', 'Follow-up'];
+    const rows = filteredVisits.map((v) => [
+      formatDate(v.createdAt),
+      v.businessName || '',
+      v.ownerName || '',
+      v.phone || '',
+      v.city || '',
+      v.state || '',
+      v.staffName || '',
+      v.status || '',
+      v.demoGiven ? 'Yes' : 'No',
+      (v.discussionNotes || '').replace(/"/g, '""'),
+      v.location?.mapsUrl || '',
+      v.followUpDate || '',
+    ]);
+
+    const csvContent = [headers, ...rows].map((row) => row.map((f) => `"${f}"`).join(',')).join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Field_Visits_${todayStr}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('CSV exported!');
+  };
+
+  // Close status dropdown on outside click
+  useEffect(() => {
+    const handleClick = () => setStatusDropdownId(null);
+    if (statusDropdownId) {
+      document.addEventListener('click', handleClick);
+      return () => document.removeEventListener('click', handleClick);
+    }
+  }, [statusDropdownId]);
+
   if (isLoading) {
-    return <LoadingSpinner fullScreen label="Loading library marketing visits and GPS locations..." />;
+    return <LoadingSpinner fullScreen label="Loading field marketing data..." />;
   }
 
   return (
@@ -236,52 +556,339 @@ export const FieldMarketing = () => {
         title={isSuperAdmin ? 'Field Marketing & Staff Oversight' : 'My Field Marketing & Library Visits'}
         subtitle={
           isSuperAdmin
-            ? 'Super Admin View: Monitor all marketing reps, on-site visits, live GPS locations, and closed deals.'
-            : `Personal Field Workspace (${user?.displayName || 'Staff'}): Record your on-site library visits with GPS and track your closed deals.`
+            ? 'Discover nearby libraries, track visits, GPS verification, and monitor team performance.'
+            : `Personal Field Workspace (${user?.displayName || 'Staff'}): Discover, visit, and track libraries with GPS.`
         }
         action={
-          hasPermission('marketing', 'create') && (
+          <div className="flex items-center gap-2">
+            {hasPermission('marketing', 'create') && (
+              <button
+                onClick={() => {
+                  resetForm();
+                  setEditingVisit(null);
+                  setShowModal(true);
+                  getCurrentGPSLocation().then((loc) => {
+                    setGpsData(loc);
+                    toast.success(`GPS Auto-locked (±${loc.accuracy}m)`);
+                  }).catch(() => {});
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition cursor-pointer"
+              >
+                <Plus size={16} />
+                <span>Log Visit</span>
+              </button>
+            )}
             <button
-              onClick={() => {
-                resetForm();
-                setShowModal(true);
-              }}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition cursor-pointer"
+              onClick={handleExportCSV}
+              className="inline-flex items-center gap-2 px-3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+              title="Export CSV"
             >
-              <Plus size={16} />
-              <span>Log Library Visit</span>
+              <Download size={14} />
+              <span className="hidden sm:inline">Export CSV</span>
             </button>
-          )
+          </div>
         }
       />
 
-      {/* Top Stat Summary */}
+      {/* ═══ SECTION A: Auto-Find Nearest Libraries & Gyms ═══ */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+        <div className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-100 shrink-0">
+              <Compass size={20} />
+            </div>
+            <div>
+              <h3 className="text-sm font-black text-slate-900">
+                🔍 Nearest {activeCategory === 'gym' ? 'Gyms & Fitness Centers' : 'Study Libraries'}
+              </h3>
+              <p className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-0.5">
+                <MapPin size={12} className="text-blue-600 shrink-0" />
+                <span className="font-bold text-slate-700">{currentLocationName}</span>
+                <button
+                  type="button"
+                  onClick={loadDeviceGPS}
+                  title="Re-detect Live GPS"
+                  className="text-blue-600 hover:text-blue-800 text-[10px] font-bold underline ml-1 cursor-pointer flex items-center gap-0.5"
+                >
+                  <Crosshair size={10} /> Auto-Detect GPS
+                </button>
+              </p>
+            </div>
+          </div>
+
+          {/* Simple 2-Way Category Switcher: Libraries vs Gyms */}
+          <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl self-start sm:self-auto border border-slate-200">
+            <button
+              type="button"
+              onClick={() => handleCategorySwitch('library')}
+              className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                activeCategory === 'library'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span>📚 Study Libraries</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleCategorySwitch('gym')}
+              className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                activeCategory === 'gym'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span>🏋️ Gyms</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {/* Search Controls */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+            <div className="flex-1">
+              <input
+                type="text"
+                placeholder={activeCategory === 'gym' ? "Search specific gym name (or leave empty for all nearest)..." : "Search specific library name (or leave empty for all nearest)..."}
+                value={manualSearchQuery}
+                onChange={(e) => setManualSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleManualSearch()}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/10"
+              />
+            </div>
+            <select
+              value={searchRadius}
+              onChange={(e) => {
+                const r = Number(e.target.value);
+                setSearchRadius(r);
+                if (myLocation) performSearch(myLocation, activeCategory, manualSearchQuery);
+              }}
+              className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
+            >
+              {RADIUS_OPTIONS.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label} Radius
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={handleManualSearch}
+              disabled={searchingNearby || !myLocation}
+              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50 flex items-center gap-2 shrink-0"
+            >
+              {searchingNearby ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <Search size={14} />
+              )}
+              <span>{searchingNearby ? 'Finding...' : 'Find Nearest'}</span>
+            </button>
+          </div>
+
+            {/* Results Grid */}
+            {nearbySearchDone && (
+              <div>
+                <p className="text-xs font-bold text-slate-500 mb-3">
+                  {nearbyLibraries.length} libraries found • Sorted by distance (nearest first)
+                </p>
+                {nearbyLibraries.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[480px] overflow-y-auto pr-1">
+                    {nearbyLibraries.map((place) => {
+                      const placeHistory = getPlaceVisitHistory(place.placeId);
+                      const lastVisit = placeHistory[0];
+
+                      return (
+                        <div
+                          key={place.placeId}
+                          className="p-4 rounded-xl border border-slate-200 bg-slate-50/40 hover:bg-white hover:shadow-md transition-all space-y-3"
+                        >
+                          {/* Header */}
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="font-bold text-slate-900 text-sm truncate">{place.name}</p>
+                              <p className="text-[11px] text-slate-500 truncate mt-0.5">{place.address}</p>
+                            </div>
+                            <span className="text-xs font-extrabold text-blue-600 bg-blue-50 px-2 py-1 rounded-lg whitespace-nowrap border border-blue-100">
+                              {place.distanceFormatted}
+                            </span>
+                          </div>
+
+                          {/* Rating + Open */}
+                          <div className="flex items-center gap-3 text-[11px]">
+                            {place.rating && (
+                              <span className="flex items-center gap-1 font-bold text-amber-700">
+                                <Star size={11} className="fill-amber-400 text-amber-400" />
+                                {place.rating} ({place.totalRatings})
+                              </span>
+                            )}
+                            {place.isOpen !== null && (
+                              <span className={`font-bold ${place.isOpen ? 'text-emerald-600' : 'text-rose-500'}`}>
+                                {place.isOpen ? '● Open' : '● Closed'}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Visit History Badge */}
+                          {lastVisit ? (
+                            <div className="p-2 bg-emerald-50/80 rounded-lg border border-emerald-200/60 text-[11px]">
+                              <span className="font-bold text-emerald-800">
+                                ✅ Visited {placeHistory.length}x • Last by {lastVisit.staffName}
+                              </span>
+                              <p className="text-emerald-700 mt-0.5 truncate">
+                                {lastVisit.status} — "{(lastVisit.discussionNotes || '').slice(0, 60)}"
+                              </p>
+                            </div>
+                          ) : (
+                            <p className="text-[11px] text-slate-400 italic">Not visited yet</p>
+                          )}
+
+                          {/* Action Buttons */}
+                          <div className="flex items-center gap-2 pt-1">
+                            {myLocation && (
+                              <a
+                                href={getNavigationUrl(myLocation.latitude, myLocation.longitude, place.lat, place.lng)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold rounded-lg flex items-center justify-center gap-1.5 transition"
+                              >
+                                <Compass size={13} />
+                                Navigate
+                              </a>
+                            )}
+                            {hasPermission('marketing', 'create') && (
+                              <button
+                                onClick={() => openLogVisitFromPlace(place)}
+                                className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold rounded-lg flex items-center justify-center gap-1.5 transition cursor-pointer"
+                              >
+                                <Plus size={13} />
+                                Log Visit
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-sm text-slate-400">
+                    No libraries found. Try a different search or increase radius.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!nearbySearchDone && !searchingNearby && (
+              <div className="text-center py-6 text-xs text-slate-400">
+                Click "Search Libraries" to discover nearby study libraries, reading rooms, and study points.
+              </div>
+            )}
+          </div>
+        </div>
+
+      {/* ═══ SECTION B: Today's Follow-up Alerts ═══ */}
+      {dueFollowUps.length > 0 && (
+        <div className="bg-amber-50/80 rounded-2xl border border-amber-200/80 p-5 shadow-xs space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center">
+                <AlertTriangle size={16} />
+              </div>
+              <div>
+                <h3 className="text-xs font-black text-amber-900 uppercase tracking-wider">
+                  📞 {dueFollowUps.length} Follow-up Callbacks Due {overdueCount > 0 && `(${overdueCount} Overdue!)`}
+                </h3>
+                <p className="text-[11px] text-amber-700">Call these library owners today — don't lose the lead!</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {dueFollowUps.slice(0, 6).map((v) => (
+              <div
+                key={v.id}
+                className={`p-3 rounded-xl border bg-white/80 space-y-2 ${
+                  v.followUpDate < todayStr ? 'border-rose-300 ring-1 ring-rose-200' : 'border-amber-200'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-bold text-slate-900 text-xs truncate">{v.businessName}</p>
+                    <p className="text-[10px] text-slate-500">{v.ownerName}</p>
+                  </div>
+                  <span
+                    className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                      v.followUpDate < todayStr
+                        ? 'bg-rose-100 text-rose-700'
+                        : 'bg-amber-100 text-amber-800'
+                    }`}
+                  >
+                    {v.followUpDate < todayStr ? 'OVERDUE' : 'TODAY'}
+                  </span>
+                </div>
+
+                <p className="text-[11px] text-slate-600 line-clamp-1">
+                  "{(v.discussionNotes || '').slice(0, 80)}"
+                </p>
+
+                <div className="flex items-center justify-between gap-2">
+                  {v.phone && (
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={`tel:${v.phone}`}
+                        className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 text-[10px] font-bold rounded-lg border border-blue-200 hover:bg-blue-100 transition"
+                      >
+                        <PhoneCall size={10} /> Call
+                      </a>
+                      <a
+                        href={`https://wa.me/91${v.phone.replace(/\D/g, '')}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded-lg border border-emerald-200 hover:bg-emerald-100 transition"
+                      >
+                        <MessageCircle size={10} /> WhatsApp
+                      </a>
+                    </div>
+                  )}
+                  <button
+                    onClick={() => openReVisit(v)}
+                    className="text-[10px] font-bold text-blue-600 hover:text-blue-800 flex items-center gap-0.5 cursor-pointer"
+                  >
+                    <RotateCcw size={10} /> Re-Visit
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ═══ Stat Cards ═══ */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          title={isSuperAdmin ? (selectedStaffFilter === 'All' ? 'Total Field Visits' : 'Staff Visits') : 'My Total Visits'}
+          title={isSuperAdmin ? 'Total Field Visits' : 'My Total Visits'}
           value={totalVisitsCount}
-          subtitle={isSuperAdmin ? 'All on-site library meetings' : 'Recorded in your workspace'}
+          subtitle="All on-site library meetings"
           icon={Building2}
           color="blue"
         />
         <StatCard
-          title={isSuperAdmin ? 'Software Demos Given' : 'My Demos Given'}
+          title={isSuperAdmin ? 'Demos Given' : 'My Demos'}
           value={demosGivenCount}
-          subtitle="Library owners shown demo"
+          subtitle="Software demo shown"
           icon={Navigation}
           color="purple"
         />
         <StatCard
-          title={isSuperAdmin ? 'Follow-ups Pending' : 'My Follow-ups Pending'}
+          title="Follow-ups Pending"
           value={followUpsCount}
           subtitle="Libraries needing callback"
           icon={AlertCircle}
           color="amber"
         />
         <StatCard
-          title={isSuperAdmin ? 'Deals Closed / Won' : 'My Deals Won'}
+          title="Deals Closed"
           value={dealsClosedCount}
-          subtitle="Subscribed library clients"
+          subtitle="Subscribed clients"
           icon={CheckCircle2}
           color="emerald"
           trend={`${dealsClosedCount} Won`}
@@ -289,7 +896,7 @@ export const FieldMarketing = () => {
         />
       </div>
 
-      {/* Super Admin: Team Field Performance Summary */}
+      {/* ═══ Admin Staff Performance Panel ═══ */}
       {isSuperAdmin && staffList.length > 0 && (
         <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-3">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
@@ -298,21 +905,16 @@ export const FieldMarketing = () => {
                 <Users size={16} />
               </div>
               <div>
-                <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">
-                  Marketing Staff Performance & Work Breakdown
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  Select a team member to filter their individual visits, GPS tracking, and discussions
-                </p>
+                <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">Marketing Staff Performance</h3>
+                <p className="text-[11px] text-slate-500">Click a staff member to filter their visits</p>
               </div>
             </div>
-
             {selectedStaffFilter !== 'All' && (
               <button
                 onClick={() => setSelectedStaffFilter('All')}
                 className="text-xs font-bold text-blue-600 hover:text-blue-800 bg-blue-50 px-3 py-1.5 rounded-lg transition cursor-pointer"
               >
-                Showing Single Staff • Clear Filter (Show All)
+                Clear Filter (Show All)
               </button>
             )}
           </div>
@@ -341,18 +943,13 @@ export const FieldMarketing = () => {
                       <p className="text-xs font-bold text-slate-900">{staff.name}</p>
                       <p className="text-[10px] text-slate-500">{staff.roleLabel || 'Marketing Rep'}</p>
                     </div>
-                    <Badge variant={isSelected ? 'primary' : 'neutral'} size="sm">
+                    <Badge variant={isSelected ? 'info' : 'neutral'} size="sm">
                       {staffVisits.length} visits
                     </Badge>
                   </div>
-
                   <div className="mt-3 pt-2.5 border-t border-slate-200/60 flex items-center justify-between text-[11px]">
-                    <span className="text-slate-600">
-                      <strong>{staffDemos}</strong> Demos
-                    </span>
-                    <span className="font-bold text-emerald-700">
-                      🎉 {staffDeals} Won
-                    </span>
+                    <span className="text-slate-600"><strong>{staffDemos}</strong> Demos</span>
+                    <span className="font-bold text-emerald-700">🎉 {staffDeals} Won</span>
                   </div>
                 </div>
               );
@@ -361,7 +958,7 @@ export const FieldMarketing = () => {
         </div>
       )}
 
-      {/* Search & Filters */}
+      {/* ═══ Search, Filters & Controls ═══ */}
       <div className="flex flex-col lg:flex-row items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
         <div className="flex flex-col sm:flex-row items-center gap-3 w-full lg:w-auto flex-1">
           <div className="w-full sm:w-80">
@@ -372,37 +969,49 @@ export const FieldMarketing = () => {
             />
           </div>
 
-          {/* Admin Staff Filter Dropdown */}
           {isSuperAdmin && staffList.length > 0 && (
-            <div className="w-full sm:w-auto">
-              <select
-                value={selectedStaffFilter}
-                onChange={(e) => setSelectedStaffFilter(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-blue-600 cursor-pointer"
-              >
-                <option value="All">All Staff Members ({visits.length} visits)</option>
-                {staffList.map((s) => {
-                  const sCount = visits.filter(
-                    (v) => v.staffId === s.id || v.staffName?.toLowerCase() === s.name.toLowerCase()
-                  ).length;
-                  return (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({sCount} visits)
-                    </option>
-                  );
-                })}
-              </select>
-            </div>
+            <select
+              value={selectedStaffFilter}
+              onChange={(e) => setSelectedStaffFilter(e.target.value)}
+              className="w-full sm:w-auto px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-blue-600 cursor-pointer"
+            >
+              <option value="All">All Staff ({visits.length})</option>
+              {staffList.map((s) => {
+                const sCount = visits.filter(
+                  (v) => v.staffId === s.id || v.staffName?.toLowerCase() === s.name.toLowerCase()
+                ).length;
+                return (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({sCount})
+                  </option>
+                );
+              })}
+            </select>
           )}
         </div>
 
-        {/* Lead Status Filter Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto w-full lg:w-auto pb-1 lg:pb-0">
+        <div className="flex items-center gap-1.5 overflow-x-auto w-full lg:w-auto pb-1 lg:pb-0 flex-wrap">
+          {/* Date filter */}
+          {DATE_FILTERS.map((df) => (
+            <button
+              key={df.id}
+              onClick={() => setDateFilter(df.id)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer ${
+                dateFilter === df.id
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+              }`}
+            >
+              {df.label}
+            </button>
+          ))}
+          <span className="text-slate-300 mx-1">|</span>
+          {/* Status filter */}
           {['All', 'Interested', 'Demo Given', 'Follow Up', 'Deal Closed'].map((st) => (
             <button
               key={st}
               onClick={() => setStatusFilter(st)}
-              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer ${
                 statusFilter === st
                   ? 'bg-blue-600 text-white shadow-xs'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -410,15 +1019,13 @@ export const FieldMarketing = () => {
             >
               {st}
               {st === 'All' && ` (${baseVisits.length})`}
-              {st === 'Interested' && ` (${baseVisits.filter((v) => v.status === 'Interested').length})`}
               {st === 'Deal Closed' && ` (${dealsClosedCount})`}
             </button>
           ))}
         </div>
       </div>
 
-
-      {/* Visits Table */}
+      {/* ═══ SECTION C: Visits Table ═══ */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -426,144 +1033,200 @@ export const FieldMarketing = () => {
               <tr className="bg-slate-50/80 border-b border-slate-100 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
                 <th className="px-5 py-3.5">Client & Target</th>
                 <th className="px-5 py-3.5">Owner & Contact</th>
-                <th className="px-5 py-3.5">Marketing Staff</th>
+                <th className="px-5 py-3.5">Staff & Date</th>
                 <th className="px-5 py-3.5">Discussion & Demo</th>
-                <th className="px-5 py-3.5">GPS Location Verification</th>
+                <th className="px-5 py-3.5">GPS Verification</th>
                 <th className="px-5 py-3.5">Status</th>
                 <th className="px-5 py-3.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-sm">
               {filteredVisits.length > 0 ? (
-                filteredVisits.map((visit) => (
-                  <tr key={visit.id} className="hover:bg-slate-50/70 transition-colors">
-                    {/* Business Name */}
-                    <td className="px-5 py-4">
-                      <div className="flex items-center gap-3">
-                        <div
-                          className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 ${
-                            visit.clientType === 'Gym'
-                              ? 'bg-emerald-50 text-emerald-600 border border-emerald-100'
-                              : visit.clientType === 'Library'
-                              ? 'bg-blue-50 text-blue-600 border border-blue-100'
-                              : 'bg-purple-50 text-purple-600 border border-purple-100'
-                          }`}
-                        >
-                          {visit.clientType === 'Gym' ? <Dumbbell size={16} /> : <Building2 size={16} />}
+                filteredVisits.map((visit) => {
+                  const visitNum = getVisitNumber(visit);
+                  return (
+                    <tr key={visit.id} className="hover:bg-slate-50/70 transition-colors">
+                      {/* Business Name */}
+                      <td className="px-5 py-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center font-bold text-xs shrink-0">
+                            <Building2 size={16} />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-bold text-slate-900 truncate max-w-xs">
+                              {visit.businessName}
+                            </p>
+                            <span className="text-[11px] text-slate-400 font-semibold block">
+                              {visit.clientType} • {visit.city || 'City'}
+                              {visitNum && visitNum > 1 && (
+                                <span className="ml-1 text-blue-600 font-bold">• Visit #{visitNum}</span>
+                              )}
+                            </span>
+                          </div>
                         </div>
-                        <div className="min-w-0">
-                          <p className="font-bold text-slate-900 truncate max-w-xs">
-                            {visit.businessName}
-                          </p>
-                          <span className="text-[11px] text-slate-400 font-semibold block">
-                            {visit.clientType} • {visit.city || 'City'}
-                          </span>
-                        </div>
-                      </div>
-                    </td>
+                      </td>
 
-                    {/* Owner & Phone */}
-                    <td className="px-5 py-4 text-xs text-slate-600">
-                      <div className="font-semibold text-slate-800">{visit.ownerName}</div>
-                      {visit.phone && (
-                        <div className="flex items-center gap-1 text-slate-500 font-medium mt-0.5">
-                          <Phone size={11} className="text-slate-400" />
-                          <span>{visit.phone}</span>
-                        </div>
-                      )}
-                    </td>
-
-                    {/* Staff Name & Date */}
-                    <td className="px-5 py-4 text-xs text-slate-600 whitespace-nowrap">
-                      <div className="font-bold text-slate-800">{visit.staffName}</div>
-                      <div className="text-[11px] text-slate-400 font-medium mt-0.5">
-                        {formatDate(visit.createdAt)}
-                      </div>
-                      <div className="text-[10px] text-slate-400">
-                        {visit.checkInTime} - {visit.checkOutTime} ({visit.durationMinutes || 15}m)
-                      </div>
-                    </td>
-
-                    {/* Discussion & Demo */}
-                    <td className="px-5 py-4 max-w-xs text-xs">
-                      <p className="text-slate-700 line-clamp-2 leading-relaxed">
-                        {visit.discussionNotes || 'No notes provided.'}
-                      </p>
-                      {visit.demoGiven && (
-                        <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">
-                          <Check size={10} /> Demo Given
-                        </span>
-                      )}
-                      {visit.followUpDate && (
-                        <span className="block text-[10px] text-amber-600 font-semibold mt-0.5">
-                          Follow-up: {visit.followUpDate}
-                        </span>
-                      )}
-                    </td>
-
-                    {/* GPS Location Proof */}
-                    <td className="px-5 py-4 whitespace-nowrap text-xs">
-                      {visit.location ? (
-                        <div className="space-y-1">
-                          <a
-                            href={visit.location.mapsUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 font-bold hover:bg-blue-100 transition"
-                          >
-                            <MapPin size={12} className="text-blue-600" />
-                            <span>View on Google Map</span>
-                            <ExternalLink size={10} />
-                          </a>
-                          <p className="text-[10px] text-slate-400 font-medium">
-                            Accuracy: ±{visit.location.accuracy || 10}m
-                          </p>
-                        </div>
-                      ) : (
-                        <span className="text-[11px] text-slate-400 italic">No GPS logged</span>
-                      )}
-                    </td>
-
-                    {/* Status */}
-                    <td className="px-5 py-4 whitespace-nowrap">
-                      <Badge variant={getStatusBadgeVariant(visit.status)} size="sm">
-                        {visit.status}
-                      </Badge>
-                    </td>
-
-                    {/* Actions */}
-                    <td className="px-5 py-4 text-right whitespace-nowrap">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          onClick={() => setSelectedVisit(visit)}
-                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition cursor-pointer"
-                        >
-                          Inspect
-                        </button>
-                        {hasPermission('marketing', 'delete') && (
-                          <button
-                            onClick={() => {
-                              if (window.confirm(`Delete visit record for "${visit.businessName}"?`)) {
-                                deleteMutation.mutate(visit.id);
-                              }
-                            }}
-                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                            title="Delete"
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                      {/* Owner & Contact */}
+                      <td className="px-5 py-4 text-xs text-slate-600">
+                        <div className="font-semibold text-slate-800">{visit.ownerName}</div>
+                        {visit.phone && (
+                          <div className="flex items-center gap-2 mt-1">
+                            <a href={`tel:${visit.phone}`} className="text-blue-600 hover:text-blue-800" title="Call">
+                              <PhoneCall size={12} />
+                            </a>
+                            <a
+                              href={`https://wa.me/91${visit.phone.replace(/\D/g, '')}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-emerald-600 hover:text-emerald-800"
+                              title="WhatsApp"
+                            >
+                              <MessageCircle size={12} />
+                            </a>
+                            <span className="text-slate-500 text-[11px]">{visit.phone}</span>
+                          </div>
                         )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                      </td>
+
+                      {/* Staff & Date */}
+                      <td className="px-5 py-4 text-xs text-slate-600 whitespace-nowrap">
+                        <div className="font-bold text-slate-800">{visit.staffName}</div>
+                        <div className="text-[11px] text-slate-400 font-medium mt-0.5">
+                          {formatDate(visit.createdAt)}
+                        </div>
+                        <div className="text-[10px] text-slate-400">
+                          {visit.checkInTime} - {visit.checkOutTime}
+                        </div>
+                      </td>
+
+                      {/* Discussion & Demo */}
+                      <td className="px-5 py-4 max-w-xs text-xs">
+                        <p className="text-slate-700 line-clamp-2 leading-relaxed">
+                          {visit.discussionNotes || 'No notes.'}
+                        </p>
+                        {visit.demoGiven && (
+                          <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">
+                            <Check size={10} /> Demo Given
+                          </span>
+                        )}
+                        {visit.followUpDate && (
+                          <span className="block text-[10px] text-amber-600 font-semibold mt-0.5">
+                            Follow-up: {visit.followUpDate}
+                          </span>
+                        )}
+                      </td>
+
+                      {/* GPS */}
+                      <td className="px-5 py-4 whitespace-nowrap text-xs">
+                        {visit.location ? (
+                          <div className="space-y-1">
+                            <a
+                              href={visit.location.mapsUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 font-bold hover:bg-blue-100 transition"
+                            >
+                              <MapPin size={12} className="text-blue-600" />
+                              <span>Google Map</span>
+                              <ExternalLink size={10} />
+                            </a>
+                            <p className="text-[10px] text-slate-400 font-medium">±{visit.location.accuracy || 10}m</p>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-400 italic">No GPS</span>
+                        )}
+                      </td>
+
+                      {/* Status (Inline Changeable) */}
+                      <td className="px-5 py-4 whitespace-nowrap relative">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setStatusDropdownId(statusDropdownId === visit.id ? null : visit.id);
+                          }}
+                          className="cursor-pointer flex items-center gap-1"
+                        >
+                          <Badge variant={getStatusBadgeVariant(visit.status)} size="sm">
+                            {visit.status}
+                          </Badge>
+                          <ChevronDown size={12} className="text-slate-400" />
+                        </button>
+
+                        {statusDropdownId === visit.id && (
+                          <div
+                            className="absolute z-20 top-full left-2 mt-1 bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 w-48"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {VISIT_STATUSES.map((s) => (
+                              <button
+                                key={s.id}
+                                onClick={() => statusMutation.mutate({ id: visit.id, status: s.id })}
+                                className={`w-full text-left px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
+                                  visit.status === s.id
+                                    ? 'bg-blue-50 text-blue-700'
+                                    : 'hover:bg-slate-50 text-slate-700'
+                                }`}
+                              >
+                                {s.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Actions */}
+                      <td className="px-5 py-4 text-right whitespace-nowrap">
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => setSelectedVisit(visit)}
+                            className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition cursor-pointer"
+                            title="Inspect"
+                          >
+                            Inspect
+                          </button>
+                          {hasPermission('marketing', 'create') && (
+                            <button
+                              onClick={() => openEditVisit(visit)}
+                              className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition cursor-pointer"
+                              title="Edit"
+                            >
+                              <Edit3 size={13} />
+                            </button>
+                          )}
+                          {hasPermission('marketing', 'create') && (
+                            <button
+                              onClick={() => openReVisit(visit)}
+                              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
+                              title="Re-Visit"
+                            >
+                              <RotateCcw size={13} />
+                            </button>
+                          )}
+                          {hasPermission('marketing', 'delete') && (
+                            <button
+                              onClick={() => {
+                                if (window.confirm(`Delete visit record for "${visit.businessName}"?`)) {
+                                  deleteMutation.mutate(visit.id);
+                                }
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                              title="Delete"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               ) : (
                 <tr>
                   <td colSpan={7} className="p-8">
                     <EmptyState
                       icon={Navigation}
-                      title="No marketing visits logged"
-                      description="Staff can click 'Log Client Visit' to record on-site library and gym visits with live GPS proof."
+                      title="No visits found"
+                      description="Try adjusting your filters, or click 'Log Visit' to record an on-site visit."
                     />
                   </td>
                 </tr>
@@ -573,12 +1236,18 @@ export const FieldMarketing = () => {
         </div>
       </div>
 
-      {/* Log Visit Modal */}
+      {/* ═══ Log / Edit Visit Modal ═══ */}
       <Modal
         isOpen={showModal}
-        onClose={() => setShowModal(false)}
-        title="Log On-Site Library Visit"
-        subtitle="Capture live GPS location, library details, and meeting discussion notes"
+        onClose={() => { setShowModal(false); setEditingVisit(null); }}
+        title={editingVisit ? 'Edit Visit Record' : 'Log On-Site Library Visit'}
+        subtitle={
+          editingVisit
+            ? `Editing visit to ${editingVisit.businessName}`
+            : form.placeName
+            ? `📍 ${form.placeName} — ${form.placeAddress}`
+            : 'Capture GPS location, library details, and meeting notes'
+        }
         maxWidth="max-w-2xl"
       >
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -593,15 +1262,14 @@ export const FieldMarketing = () => {
                 <Crosshair size={20} className={capturingGps ? 'animate-spin' : ''} />
               </div>
               <div>
-                <p className="text-xs font-bold text-slate-900">Live Device GPS Pinpoint</p>
+                <p className="text-xs font-bold text-slate-900">Live GPS Pinpoint</p>
                 <p className="text-[11px] text-slate-500">
                   {gpsData
                     ? `GPS Locked: ${gpsData.latitude.toFixed(5)}, ${gpsData.longitude.toFixed(5)} (±${gpsData.accuracy}m)`
-                    : 'Click button to verify you are physically at the library location'}
+                    : 'Click to capture or wait for auto-lock'}
                 </p>
               </div>
             </div>
-
             <button
               type="button"
               disabled={capturingGps}
@@ -613,16 +1281,14 @@ export const FieldMarketing = () => {
               }`}
             >
               <MapPin size={14} />
-              <span>{capturingGps ? 'Locking GPS...' : gpsData ? 'Re-Capture GPS' : 'Capture GPS Now'}</span>
+              <span>{capturingGps ? 'Locking...' : gpsData ? 'Re-Capture' : 'Capture GPS'}</span>
             </button>
           </div>
 
           {/* Business Name & Owner */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Study Library Name *
-              </label>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Library Name *</label>
               <input
                 type="text"
                 required
@@ -632,11 +1298,8 @@ export const FieldMarketing = () => {
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
               />
             </div>
-
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Library Owner Name
-              </label>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Owner Name</label>
               <input
                 type="text"
                 placeholder="e.g. Rakesh Kumar"
@@ -647,74 +1310,73 @@ export const FieldMarketing = () => {
             </div>
           </div>
 
-
-          {/* Contact Mobile */}
+          {/* Phone */}
           <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-              Contact Mobile Number
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Contact Mobile</label>
+              {form.phone && <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">✓ Auto-filled from Google</span>}
+            </div>
             <input
               type="tel"
               placeholder="+91 98765 43210"
               value={form.phone}
               onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
+              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600 font-medium"
             />
           </div>
 
-          {/* State, City, and Location - 3 Separate Fields */}
+          {/* State, City, Location */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                State (राज्य) *
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">State (राज्य) *</label>
+                {form.state && <span className="text-[9px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded">✓ Auto</span>}
+              </div>
               <input
                 type="text"
                 required
-                placeholder="e.g. Rajasthan, UP, Delhi"
+                placeholder="e.g. Madhya Pradesh"
                 value={form.state}
                 onChange={(e) => setForm({ ...form, state: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600 font-medium"
               />
             </div>
-
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                City (शहर) *
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">City (शहर) *</label>
+                {form.city && <span className="text-[9px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded">✓ Auto</span>}
+              </div>
               <input
                 type="text"
                 required
-                placeholder="e.g. Jaipur, Lucknow, Kota"
+                placeholder="e.g. Guna"
                 value={form.city}
                 onChange={(e) => setForm({ ...form, city: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600 font-medium"
               />
             </div>
-
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Location / Area (क्षेत्र / पता)
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">Area / Location</label>
+                {form.address && <span className="text-[9px] text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded">✓ Auto</span>}
+              </div>
               <input
                 type="text"
-                placeholder="e.g. Mansarovar, Main Market"
+                placeholder="e.g. Gaushala Mahaveerpura"
                 value={form.address}
                 onChange={(e) => setForm({ ...form, address: e.target.value })}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600 font-medium"
               />
             </div>
           </div>
 
-          {/* Meeting Discussion Notes */}
+          {/* Discussion Notes */}
           <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-              Discussion Summary (Kya baat hui?) *
-            </label>
+            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Discussion Summary (Kya baat hui?) *</label>
             <textarea
               rows={3}
               required
-              placeholder="e.g. Met owner. They currently use register for attendance. Interested in 100-seat plan. Liked the WhatsApp reminder feature. Asked to call on Monday."
+              placeholder="Met owner. Interested in 100-seat plan. Liked WhatsApp feature. Will call Monday."
               value={form.discussionNotes}
               onChange={(e) => setForm({ ...form, discussionNotes: e.target.value })}
               className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
@@ -724,9 +1386,7 @@ export const FieldMarketing = () => {
           {/* Times & Status */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Check-in Time
-              </label>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Check-in Time</label>
               <input
                 type="text"
                 placeholder="11:30 AM"
@@ -735,11 +1395,8 @@ export const FieldMarketing = () => {
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
               />
             </div>
-
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Check-out Time
-              </label>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Check-out Time</label>
               <input
                 type="text"
                 placeholder="12:00 PM"
@@ -748,26 +1405,21 @@ export const FieldMarketing = () => {
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
               />
             </div>
-
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Lead Status
-              </label>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Lead Status</label>
               <select
                 value={form.status}
                 onChange={(e) => setForm({ ...form, status: e.target.value })}
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600 cursor-pointer"
               >
                 {VISIT_STATUSES.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label}
-                  </option>
+                  <option key={s.id} value={s.id}>{s.label}</option>
                 ))}
               </select>
             </div>
           </div>
 
-          {/* Demo Given & Follow-up */}
+          {/* Demo & Follow-up */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-center pt-2">
             <div className="flex items-center gap-2">
               <input
@@ -778,14 +1430,11 @@ export const FieldMarketing = () => {
                 className="w-4 h-4 rounded text-blue-600 cursor-pointer"
               />
               <label htmlFor="demoCheck" className="text-xs font-bold text-slate-700 cursor-pointer">
-                Live Software Demo was given to owner
+                Live Software Demo was given
               </label>
             </div>
-
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Follow-up Callback Date
-              </label>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Follow-up Date</label>
               <input
                 type="date"
                 value={form.followUpDate}
@@ -795,27 +1444,31 @@ export const FieldMarketing = () => {
             </div>
           </div>
 
-          {/* Form Actions */}
+          {/* Submit */}
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
             <button
               type="button"
-              onClick={() => setShowModal(false)}
+              onClick={() => { setShowModal(false); setEditingVisit(null); }}
               className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
-              disabled={addMutation.isPending}
+              disabled={addMutation.isPending || editMutation.isPending}
               className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
             >
-              {addMutation.isPending ? 'Logging Visit...' : 'Save Visit Record'}
+              {addMutation.isPending || editMutation.isPending
+                ? 'Saving...'
+                : editingVisit
+                ? 'Update Visit'
+                : 'Save Visit Record'}
             </button>
           </div>
         </form>
       </Modal>
 
-      {/* Visit Inspection Modal */}
+      {/* ═══ Inspection Modal ═══ */}
       <Modal
         isOpen={!!selectedVisit}
         onClose={() => setSelectedVisit(null)}
@@ -831,15 +1484,28 @@ export const FieldMarketing = () => {
               </div>
               <div>
                 <span className="text-slate-400 font-bold uppercase block mb-0.5">Lead Status</span>
-                <Badge variant={getStatusBadgeVariant(selectedVisit.status)} size="sm">
-                  {selectedVisit.status}
-                </Badge>
+                <Badge variant={getStatusBadgeVariant(selectedVisit.status)} size="sm">{selectedVisit.status}</Badge>
               </div>
               <div>
                 <span className="text-slate-400 font-bold uppercase block mb-0.5">Owner Contact</span>
                 <span className="font-semibold text-slate-800">
                   {selectedVisit.ownerName} ({selectedVisit.phone || 'N/A'})
                 </span>
+                {selectedVisit.phone && (
+                  <div className="flex items-center gap-2 mt-1">
+                    <a href={`tel:${selectedVisit.phone}`} className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 text-[10px] font-bold rounded border border-blue-200">
+                      <PhoneCall size={10} /> Call
+                    </a>
+                    <a
+                      href={`https://wa.me/91${selectedVisit.phone.replace(/\D/g, '')}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 text-[10px] font-bold rounded border border-emerald-200"
+                    >
+                      <MessageCircle size={10} /> WhatsApp
+                    </a>
+                  </div>
+                )}
               </div>
               <div>
                 <span className="text-slate-400 font-bold uppercase block mb-0.5">State & City</span>
@@ -854,20 +1520,38 @@ export const FieldMarketing = () => {
             </div>
 
             <div>
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                Meeting Discussion
-              </span>
+              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">Meeting Discussion</span>
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-sm text-slate-800 leading-relaxed whitespace-pre-wrap">
                 {selectedVisit.discussionNotes}
               </div>
             </div>
+
+            {/* Visit History for same place */}
+            {selectedVisit.placeId && getPlaceVisitHistory(selectedVisit.placeId).length > 1 && (
+              <div>
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">
+                  📜 All Visits to this Library ({getPlaceVisitHistory(selectedVisit.placeId).length})
+                </span>
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                  {getPlaceVisitHistory(selectedVisit.placeId).map((hv, idx) => (
+                    <div key={hv.id} className={`p-2.5 rounded-lg border text-xs ${hv.id === selectedVisit.id ? 'bg-blue-50 border-blue-200' : 'bg-slate-50 border-slate-200'}`}>
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-800">{hv.staffName} — {formatDate(hv.createdAt)}</span>
+                        <Badge variant={getStatusBadgeVariant(hv.status)} size="sm">{hv.status}</Badge>
+                      </div>
+                      <p className="text-slate-600 mt-1 line-clamp-1">{hv.discussionNotes}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {selectedVisit.location && (
               <div className="p-4 bg-blue-50/60 rounded-xl border border-blue-100 flex items-center justify-between">
                 <div>
                   <p className="text-xs font-bold text-blue-900">GPS On-Site Verification</p>
                   <p className="text-[11px] text-blue-700 mt-0.5">
-                    Coordinates: {selectedVisit.location.latitude}, {selectedVisit.location.longitude}
+                    Coords: {selectedVisit.location.latitude}, {selectedVisit.location.longitude}
                   </p>
                 </div>
                 <a
@@ -876,12 +1560,40 @@ export const FieldMarketing = () => {
                   rel="noopener noreferrer"
                   className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 shadow-xs transition"
                 >
-                  <MapPin size={12} />
-                  <span>Google Maps</span>
-                  <ExternalLink size={10} />
+                  <MapPin size={12} /> Google Maps <ExternalLink size={10} />
                 </a>
               </div>
             )}
+
+            {/* Quick Actions */}
+            <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+              {hasPermission('marketing', 'create') && (
+                <>
+                  <button
+                    onClick={() => { setSelectedVisit(null); openEditVisit(selectedVisit); }}
+                    className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer transition"
+                  >
+                    <Edit3 size={12} /> Edit
+                  </button>
+                  <button
+                    onClick={() => { setSelectedVisit(null); openReVisit(selectedVisit); }}
+                    className="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer transition"
+                  >
+                    <RotateCcw size={12} /> Log Re-Visit
+                  </button>
+                </>
+              )}
+              {selectedVisit.placeLat && myLocation && (
+                <a
+                  href={getNavigationUrl(myLocation.latitude, myLocation.longitude, selectedVisit.placeLat, selectedVisit.placeLng)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-lg flex items-center gap-1.5 transition"
+                >
+                  <Compass size={12} /> Navigate
+                </a>
+              )}
+            </div>
           </div>
         )}
       </Modal>
