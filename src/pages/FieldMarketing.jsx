@@ -178,17 +178,20 @@ export const FieldMarketing = () => {
     },
   });
 
+  // Default coordinates: Guna, MP (Madhya Pradesh)
+  const DEFAULT_GUNA_COORDS = { latitude: 24.6465, longitude: 77.3188, accuracy: 100, isFallback: true };
+
   // ── Auto Search Runner ────────────────────────────────────────────────────
-  const performSearch = useCallback(async (loc, category = activeCategory, customQuery = manualSearchQuery) => {
-    if (!loc) return;
+  const performSearch = useCallback(async (loc, category = activeCategory, customQuery = '') => {
+    const targetLoc = loc || myLocation || DEFAULT_GUNA_COORDS;
     setSearchingNearby(true);
     try {
-      let query = customQuery.trim();
+      let query = (customQuery != null ? customQuery : manualSearchQuery).trim();
       if (!query) {
         query = category === 'gym' ? 'gym fitness center' : 'study library reading room';
       }
-      const res = await searchLibrariesByText(query, loc.latitude, loc.longitude);
-      setNearbyLibraries(res);
+      const res = await searchLibrariesByText(query, targetLoc.latitude, targetLoc.longitude);
+      setNearbyLibraries(res || []);
       setNearbySearchDone(true);
     } catch (err) {
       console.error('Search error:', err);
@@ -196,42 +199,48 @@ export const FieldMarketing = () => {
     } finally {
       setSearchingNearby(false);
     }
-  }, [activeCategory, manualSearchQuery]);
+  }, [activeCategory, myLocation, manualSearchQuery]);
 
-  // ── Auto Detect Live Location on Mount ────────────────────────────────────
-  const loadDeviceGPS = useCallback(async () => {
+  // ── Auto Detect Live Location on Mount (Graceful Fallback to Guna, MP) ──────
+  const loadDeviceGPS = useCallback(async (isManual = false) => {
     try {
       const loc = await getCurrentGPSLocation();
       setMyLocation(loc);
       const rev = await reverseGeocode(loc.latitude, loc.longitude);
       const locName = rev.cityName || rev.formattedAddress || 'Your Live Location';
       setCurrentLocationName(locName);
-      performSearch(loc, activeCategory, '');
+      if (isManual) {
+        toast.success(`GPS Connected: ${locName}`);
+      }
+      performSearch(loc, activeCategory, manualSearchQuery);
     } catch (err) {
-      console.warn('GPS detection:', err);
-      setCurrentLocationName('GPS permission needed (check browser settings)');
-      toast.error('Please allow location permission in browser to auto-find nearest places');
+      console.warn('GPS unavailable (HTTP or permission denied), using Guna, MP fallback:', err);
+      const fallbackLoc = DEFAULT_GUNA_COORDS;
+      setMyLocation(fallbackLoc);
+      setCurrentLocationName('Guna, MP (Default Location)');
+      if (isManual) {
+        toast('GPS not available on insecure HTTP. Using Guna, MP as location.', { icon: '📍' });
+      }
+      performSearch(fallbackLoc, activeCategory, manualSearchQuery);
     }
-  }, [activeCategory, performSearch]);
+  }, [activeCategory, manualSearchQuery, performSearch]);
 
+  // Run ONCE on mount — prevents multiple duplicate error toasts
   useEffect(() => {
-    loadDeviceGPS();
-  }, [loadDeviceGPS]);
+    loadDeviceGPS(false);
+  }, []);
 
   const handleCategorySwitch = (cat) => {
     setActiveCategory(cat);
     setManualSearchQuery('');
-    if (myLocation) {
-      performSearch(myLocation, cat, '');
-    }
+    const loc = myLocation || DEFAULT_GUNA_COORDS;
+    performSearch(loc, cat, '');
   };
 
-  const handleManualSearch = () => {
-    if (!myLocation) {
-      loadDeviceGPS();
-      return;
-    }
-    performSearch(myLocation, activeCategory, manualSearchQuery);
+  const handleManualSearch = (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    const loc = myLocation || DEFAULT_GUNA_COORDS;
+    performSearch(loc, activeCategory, manualSearchQuery);
   };
 
   // ── Form helpers ───────────────────────────────────────────────────────────
@@ -606,7 +615,7 @@ export const FieldMarketing = () => {
                 <span className="font-bold text-slate-700">{currentLocationName}</span>
                 <button
                   type="button"
-                  onClick={loadDeviceGPS}
+                  onClick={() => loadDeviceGPS(true)}
                   title="Re-detect Live GPS"
                   className="text-blue-600 hover:text-blue-800 text-[10px] font-bold underline ml-1 cursor-pointer flex items-center gap-0.5"
                 >
@@ -649,10 +658,10 @@ export const FieldMarketing = () => {
             <div className="flex-1">
               <input
                 type="text"
-                placeholder={activeCategory === 'gym' ? "Search specific gym name (or leave empty for all nearest)..." : "Search specific library name (or leave empty for all nearest)..."}
+                placeholder={activeCategory === 'gym' ? "Search gym name or city (e.g. Guna, Indore)..." : "Search library name or city (e.g. Guna, Indore)..."}
                 value={manualSearchQuery}
                 onChange={(e) => setManualSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleManualSearch()}
+                onKeyDown={(e) => e.key === 'Enter' && handleManualSearch(e)}
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-600/10"
               />
             </div>
@@ -661,7 +670,7 @@ export const FieldMarketing = () => {
               onChange={(e) => {
                 const r = Number(e.target.value);
                 setSearchRadius(r);
-                if (myLocation) performSearch(myLocation, activeCategory, manualSearchQuery);
+                performSearch(myLocation, activeCategory, manualSearchQuery);
               }}
               className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
             >
@@ -673,7 +682,7 @@ export const FieldMarketing = () => {
             </select>
             <button
               onClick={handleManualSearch}
-              disabled={searchingNearby || !myLocation}
+              disabled={searchingNearby}
               className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50 flex items-center gap-2 shrink-0"
             >
               {searchingNearby ? (
@@ -689,7 +698,7 @@ export const FieldMarketing = () => {
             {nearbySearchDone && (
               <div>
                 <p className="text-xs font-bold text-slate-500 mb-3">
-                  {nearbyLibraries.length} libraries found • Sorted by distance (nearest first)
+                  {nearbyLibraries.length} {activeCategory === 'gym' ? 'gyms' : 'libraries'} found • Sorted by distance (nearest first)
                 </p>
                 {nearbyLibraries.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[480px] overflow-y-auto pr-1">
@@ -708,8 +717,11 @@ export const FieldMarketing = () => {
                               <p className="font-bold text-slate-900 text-sm truncate">{place.name}</p>
                               <p className="text-[11px] text-slate-500 truncate mt-0.5">{place.address}</p>
                             </div>
-                            <span className="text-xs font-extrabold text-blue-600 bg-blue-50 px-2 py-1 rounded-lg whitespace-nowrap border border-blue-100">
-                              {place.distanceFormatted}
+                            <span className="text-xs font-extrabold text-blue-600 bg-blue-50 px-2 py-1 rounded-lg whitespace-nowrap border border-blue-100 flex items-center gap-1">
+                              <span>{place.distanceFormatted}</span>
+                              {place.durationFormatted && (
+                                <span className="text-[10px] text-blue-500 font-medium">({place.durationFormatted})</span>
+                              )}
                             </span>
                           </div>
 

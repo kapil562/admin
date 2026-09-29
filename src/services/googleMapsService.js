@@ -62,6 +62,105 @@ export const formatDistance = (meters) => {
   return `${(meters / 1000).toFixed(1)} km`;
 };
 
+/**
+ * Format duration string from Google Routes API (e.g. "118s") to human readable format
+ */
+export const formatDuration = (durationStr) => {
+  if (!durationStr) return null;
+  const seconds = parseInt(durationStr, 10);
+  if (isNaN(seconds) || seconds <= 0) return null;
+  if (seconds < 60) return '< 1 min';
+  const mins = Math.round(seconds / 60);
+  if (mins < 60) return `${mins} min`;
+  const hrs = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hrs} hr ${remMins} min` : `${hrs} hr`;
+};
+
+/**
+ * Compute real driving road distance and travel time for places using Google Routes API
+ * Matches exactly what Google Maps Navigation displays on road routes.
+ */
+export const enrichWithRealRoadDistances = async (originLat, originLng, places) => {
+  if (!originLat || !originLng || !places || places.length === 0) return places;
+  const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+  if (!apiKey) return places;
+
+  try {
+    const validPlaces = places.filter((p) => p.lat != null && p.lng != null).slice(0, 25);
+    if (validPlaces.length === 0) return places;
+
+    const postData = {
+      origins: [
+        {
+          waypoint: {
+            location: {
+              latLng: { latitude: originLat, longitude: originLng },
+            },
+          },
+        },
+      ],
+      destinations: validPlaces.map((p) => ({
+        waypoint: {
+          location: {
+            latLng: { latitude: p.lat, longitude: p.lng },
+          },
+        },
+      })),
+      travelMode: 'DRIVE',
+    };
+
+    const res = await fetch('https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': 'destinationIndex,status,distanceMeters,duration',
+      },
+      body: JSON.stringify(postData),
+    });
+
+    if (!res.ok) {
+      console.warn('Routes API computeRouteMatrix error status:', res.status);
+      return places;
+    }
+
+    const data = await res.json();
+    if (!Array.isArray(data)) return places;
+
+    const matrixMap = new Map();
+    for (const item of data) {
+      if (item.destinationIndex != null && item.distanceMeters != null) {
+        matrixMap.set(item.destinationIndex, {
+          distanceMeters: item.distanceMeters,
+          duration: item.duration,
+        });
+      }
+    }
+
+    const enriched = places.map((place) => {
+      const idx = validPlaces.findIndex((p) => p.placeId === place.placeId);
+      if (idx !== -1 && matrixMap.has(idx)) {
+        const routeInfo = matrixMap.get(idx);
+        return {
+          ...place,
+          distance: routeInfo.distanceMeters,
+          distanceFormatted: formatDistance(routeInfo.distanceMeters),
+          durationFormatted: formatDuration(routeInfo.duration),
+          isRoadDistance: true,
+        };
+      }
+      return place;
+    });
+
+    enriched.sort((a, b) => (a.distance ?? 999999) - (b.distance ?? 999999));
+    return enriched;
+  } catch (err) {
+    console.warn('Failed to compute real road distances, falling back to straight-line:', err);
+    return places;
+  }
+};
+
 // ── Google Maps Navigation URL ───────────────────────────────────────────────
 
 /**
@@ -402,6 +501,8 @@ export const searchLibrariesByText = async (query, lat, lng) => {
 
         if (lat && lng) {
           formatted.sort((a, b) => (a.distance ?? 999999) - (b.distance ?? 999999));
+          const enriched = await enrichWithRealRoadDistances(lat, lng, formatted);
+          return enriched;
         }
         return formatted;
       }
@@ -461,7 +562,13 @@ export const searchLibrariesByText = async (query, lat, lng) => {
             });
 
           formatted.sort((a, b) => a.distance - b.distance);
-          resolve(formatted);
+          if (lat && lng) {
+            enrichWithRealRoadDistances(lat, lng, formatted)
+              .then(resolve)
+              .catch(() => resolve(formatted));
+          } else {
+            resolve(formatted);
+          }
         } else {
           resolve([]);
         }
