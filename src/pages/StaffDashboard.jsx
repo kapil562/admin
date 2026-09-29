@@ -1083,30 +1083,12 @@ export const StaffDashboard = () => {
               </div>
             </div>
 
-            {/* Action Agenda Tags */}
-            <div className="flex items-center gap-1 flex-wrap">
-              {NEXT_ACTION_TAGS.map((tag) => (
-                <button
-                  key={tag}
-                  type="button"
-                  onClick={() => setForm({ ...form, nextActionItem: tag })}
-                  className={`px-2 py-0.5 rounded text-[10px] font-bold transition border cursor-pointer ${
-                    form.nextActionItem === tag
-                      ? 'bg-amber-600 text-white border-amber-600'
-                      : 'bg-white text-slate-700 border-slate-200 hover:bg-amber-50'
-                  }`}
-                >
-                  {tag}
-                </button>
-              ))}
-            </div>
-
             <input
               type="text"
-              placeholder="Re-visit / Reminder Note (e.g. Kal owner milenge, 30 min me aao...)"
+              placeholder="Re-visit / Reminder Note: e.g. Kal owner milenge, 30 min me aao..."
               value={form.reminderNote}
               onChange={(e) => setForm({ ...form, reminderNote: e.target.value })}
-              className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-900 outline-none focus:border-amber-600 font-medium"
+              className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs text-slate-900 outline-none focus:border-amber-600 font-medium"
             />
           </div>
 
