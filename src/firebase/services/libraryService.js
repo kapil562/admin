@@ -8,9 +8,15 @@ export const getLibraryClients = async () => {
   try {
     const libsSnap = await getDocs(collection(libraryDb, 'libraries'));
     
+    // Filter docs to only include those that have a valid email
+    const validDocs = libsSnap.docs.filter((libDoc) => {
+      const data = libDoc.data() || {};
+      return data.email && typeof data.email === 'string' && data.email.trim() !== '';
+    });
+
     // Fetch all root subscriptions in parallel or map them
     const clients = await Promise.all(
-      libsSnap.docs.map(async (libDoc) => {
+      validDocs.map(async (libDoc) => {
         const libId = libDoc.id;
         const data = libDoc.data() || {};
         
@@ -377,4 +383,24 @@ export const getLibraryDetails = async (tenantId) => {
     memberships,
     students,
   };
+};
+
+/**
+ * Manually override a library's subscription
+ */
+export const overrideTenantSubscription = async (tenantId, subscriptionData) => {
+  const { planName, planId, startDate, expiryDate, reason } = subscriptionData;
+  const subRef = doc(libraryDb, 'subscriptions', tenantId);
+
+  await setDoc(subRef, {
+    planId: planId || 'custom',
+    planName: planName || 'Custom Plan',
+    startDate: startDate,
+    expiryDate: expiryDate,
+    status: 'active',
+    updatedAt: new Date().toISOString(),
+    overrideReason: reason || 'Manual override by Super Admin'
+  }, { merge: true });
+
+  // Optional: Also log this action in transactions or admin audit logs if needed.
 };

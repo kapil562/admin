@@ -65,7 +65,22 @@ export const LibraryDetails = () => {
         {/* Profile Card */}
         <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 lg:col-span-2">
           <div className="flex items-center gap-4 mb-6">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center text-xl font-black shadow-lg">
+            {(library.logoUrl || library.logo) ? (
+              <img 
+                src={library.logoUrl || library.logo} 
+                alt={library.studyPointName || library.libraryName} 
+                className="w-14 h-14 rounded-2xl object-cover shadow-lg border border-slate-200"
+                onError={(e) => {
+                  e.target.onerror = null;
+                  e.target.style.display = 'none';
+                  e.target.nextElementSibling.style.display = 'flex';
+                }}
+              />
+            ) : null}
+            <div 
+              className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white items-center justify-center text-xl font-black shadow-lg"
+              style={{ display: (library.logoUrl || library.logo) ? 'none' : 'flex' }}
+            >
               {(library.studyPointName || library.libraryName || 'L').substring(0, 2).toUpperCase()}
             </div>
             <div>

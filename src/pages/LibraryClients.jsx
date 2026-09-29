@@ -6,7 +6,9 @@ import {
   cleanLibraryTenantData,
   purgeLibraryTenantData,
   restoreOrCreateLibraryClient,
+  overrideTenantSubscription
 } from '../firebase/services/libraryService';
+import { getSubscriptionPlans } from '../firebase/services/planService';
 import { PageHeader } from '../components/ui/PageHeader';
 import { StatCard } from '../components/ui/StatCard';
 import { Badge } from '../components/ui/Badge';
@@ -54,6 +56,16 @@ export const LibraryClients = () => {
   const [cleanMode, setCleanMode] = useState('data_only'); // 'data_only' | 'full_purge'
   const [cleanConfirmChecked, setCleanConfirmChecked] = useState(false);
 
+  // Subscription Override States
+  const [overrideTarget, setOverrideTarget] = useState(null);
+  const [overrideForm, setOverrideForm] = useState({
+    planId: '',
+    planName: '',
+    startDate: new Date().toISOString().split('T')[0],
+    expiryDate: new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0],
+    reason: ''
+  });
+
   // Restore / Add Client Modal States
   const [showRestoreModal, setShowRestoreModal] = useState(false);
   const [restoreForm, setRestoreForm] = useState({
@@ -69,6 +81,21 @@ export const LibraryClients = () => {
   const { data: clients = [], isLoading, refetch } = useQuery({
     queryKey: ['admin_library_clients'],
     queryFn: getLibraryClients,
+  });
+
+  const { data: plans = [] } = useQuery({
+    queryKey: ['admin_saas_plans'],
+    queryFn: getSubscriptionPlans,
+  });
+
+  const overrideMutation = useMutation({
+    mutationFn: ({ tenantId, formData }) => overrideTenantSubscription(tenantId, formData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin_library_clients'] });
+      toast.success('Subscription overridden successfully!');
+      setOverrideTarget(null);
+    },
+    onError: (err) => toast.error('Failed to override subscription: ' + err.message),
   });
 
   const cleanMutation = useMutation({
@@ -321,7 +348,23 @@ export const LibraryClients = () => {
                   >
                     <td className="px-5 py-4">
                       <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 font-bold text-xs shrink-0">
+                        {client.logoUrl ? (
+                          <img 
+                            src={client.logoUrl} 
+                            alt={client.libraryName} 
+                            className="w-9 h-9 rounded-xl object-cover shrink-0 border border-slate-200 shadow-sm"
+                            onError={(e) => {
+                              // Fallback if image fails to load
+                              e.target.onerror = null;
+                              e.target.style.display = 'none';
+                              e.target.nextElementSibling.style.display = 'flex';
+                            }}
+                          />
+                        ) : null}
+                        <div 
+                          className="w-9 h-9 rounded-xl bg-blue-50 border border-blue-100 items-center justify-center text-blue-600 font-bold text-xs shrink-0"
+                          style={{ display: client.logoUrl ? 'none' : 'flex' }}
+                        >
                           {client.libraryName.substring(0, 2).toUpperCase()}
                         </div>
                         <div className="min-w-0">
@@ -393,6 +436,19 @@ export const LibraryClients = () => {
                         >
                           <Eye size={13} />
                           <span>Inspect</span>
+                        </button>
+
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setOverrideTarget(client);
+                          }}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold rounded-lg transition cursor-pointer z-10 relative"
+                          title="Override Subscription"
+                        >
+                          <ShieldCheck size={13} />
+                          <span>Manage Plan</span>
                         </button>
 
                         <button
@@ -835,6 +891,115 @@ export const LibraryClients = () => {
           </div>
         </form>
       </Modal>
+
+      {/* Subscription Override Modal */}
+      <Modal
+        isOpen={!!overrideTarget}
+        onClose={() => setOverrideTarget(null)}
+        title="Override Library Subscription"
+        icon={ShieldCheck}
+        maxWidth="md"
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            overrideMutation.mutate({
+              tenantId: overrideTarget?.id,
+              formData: overrideForm
+            });
+          }}
+          className="space-y-4"
+        >
+          <div className="p-3 bg-amber-50/80 rounded-xl border border-amber-200 text-xs text-amber-900 leading-relaxed">
+            <strong>Warning:</strong> This directly assigns a subscription plan to the selected Library without any payment. It instantly grants them platform access based on the dates below.
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+              Select SaaS Plan *
+            </label>
+            <select
+              required
+              value={overrideForm.planId}
+              onChange={(e) => {
+                const plan = plans.find(p => p.id === e.target.value);
+                setOverrideForm({
+                  ...overrideForm, 
+                  planId: e.target.value,
+                  planName: plan ? plan.name : ''
+                });
+              }}
+              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 outline-none focus:border-blue-600 focus:bg-white cursor-pointer"
+            >
+              <option value="">-- Choose a Plan --</option>
+              {plans.map(p => (
+                <option key={p.id} value={p.id}>{p.name} ({p.durationLabel})</option>
+              ))}
+              <option value="custom">Custom Lifetime Plan</option>
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                Valid From
+              </label>
+              <input
+                type="date"
+                required
+                value={overrideForm.startDate}
+                onChange={(e) => setOverrideForm({ ...overrideForm, startDate: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 outline-none focus:border-blue-600 focus:bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                Valid Till (Expiry)
+              </label>
+              <input
+                type="date"
+                required
+                value={overrideForm.expiryDate}
+                onChange={(e) => setOverrideForm({ ...overrideForm, expiryDate: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 outline-none focus:border-blue-600 focus:bg-white"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+              Override Reason / Internal Note *
+            </label>
+            <textarea
+              required
+              rows={2}
+              value={overrideForm.reason}
+              onChange={(e) => setOverrideForm({ ...overrideForm, reason: e.target.value })}
+              placeholder="e.g. Manual cash payment, Extended 7 days for free..."
+              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 outline-none focus:border-blue-600 focus:bg-white resize-none"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-4">
+            <button
+              type="button"
+              onClick={() => setOverrideTarget(null)}
+              className="px-5 py-2.5 bg-white border border-slate-200 text-slate-700 text-xs font-bold rounded-xl hover:bg-slate-50 transition cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={overrideMutation.isPending}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+            >
+              <ShieldCheck size={14} />
+              <span>{overrideMutation.isPending ? 'Applying...' : 'Apply Subscription'}</span>
+            </button>
+          </div>
+        </form>
+      </Modal>
+
     </div>
   );
 };
