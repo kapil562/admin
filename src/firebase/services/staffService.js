@@ -15,6 +15,22 @@ export const PERMISSION_MODULES = [
 ];
 
 export const ROLE_PRESETS = {
+  owner: {
+    label: '👑 Business Owner / Super Admin',
+    description: 'Supreme control. Full View, Create, Edit, and Delete access across all platform modules, settings, finances & staff.',
+    permissions: {
+      dashboard: { view: true },
+      marketing: { view: true, create: true, edit: true, delete: true },
+      attendance: { view: true, create: true, edit: true, delete: true },
+      clients: { view: true, create: true, edit: true, delete: true },
+      finances: { view: true, create: true, edit: true, delete: true },
+      plans: { view: true, create: true, edit: true, delete: true },
+      coupons: { view: true, create: true, edit: true, delete: true },
+      queries: { view: true, edit: true },
+      reports: { view: true },
+      staff: { view: true, create: true, edit: true, delete: true },
+    },
+  },
   marketing: {
     label: '🚶 Field Marketing Executive',
     description: 'Can log on-site visits (Libraries/Gyms) with GPS, view leads, and punch daily attendance.',

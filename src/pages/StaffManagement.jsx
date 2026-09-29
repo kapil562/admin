@@ -18,6 +18,7 @@ import { Modal } from '../components/ui/Modal';
 import { EmptyState } from '../components/ui/EmptyState';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
 import {
+  Crown,
   UserCog,
   ShieldCheck,
   Plus,
@@ -104,7 +105,7 @@ export const StaffManagement = () => {
     onError: (err) => toast.error(err.message || 'Error deleting staff'),
   });
 
-  const openModal = (staff = null) => {
+  const openModal = (staff = null, defaultRole = 'marketing') => {
     if (staff) {
       setEditingStaff(staff);
       setForm({
@@ -115,29 +116,30 @@ export const StaffManagement = () => {
         role: staff.role || 'custom',
         status: staff.status || 'active',
         compensation: {
-          baseSalary: staff.compensation?.baseSalary ?? 15000,
-          commissionPerDeal: staff.compensation?.commissionPerDeal ?? 500,
+          baseSalary: staff.compensation?.baseSalary ?? (staff.role === 'owner' ? 0 : 15000),
+          commissionPerDeal: staff.compensation?.commissionPerDeal ?? (staff.role === 'owner' ? 0 : 500),
           monthlyTargetDeals: staff.compensation?.monthlyTargetDeals ?? 10,
           monthlyTargetVisits: staff.compensation?.monthlyTargetVisits ?? 50,
         },
-        permissions: staff.permissions || {},
+        permissions: staff.permissions || (ROLE_PRESETS[staff.role]?.permissions || {}),
       });
     } else {
       setEditingStaff(null);
+      const isOwner = defaultRole === 'owner';
       setForm({
         name: '',
         email: '',
         password: '',
         phone: '',
-        role: 'marketing',
+        role: defaultRole,
         status: 'active',
         compensation: {
-          baseSalary: 15000,
-          commissionPerDeal: 500,
-          monthlyTargetDeals: 10,
-          monthlyTargetVisits: 50,
+          baseSalary: isOwner ? 0 : 15000,
+          commissionPerDeal: isOwner ? 0 : 500,
+          monthlyTargetDeals: isOwner ? 0 : 10,
+          monthlyTargetVisits: isOwner ? 0 : 50,
         },
-        permissions: ROLE_PRESETS.marketing.permissions,
+        permissions: ROLE_PRESETS[defaultRole]?.permissions || ROLE_PRESETS.marketing.permissions,
       });
     }
     setShowModal(true);
@@ -201,30 +203,46 @@ export const StaffManagement = () => {
         subtitle="Create IDs & Passwords for Marketing and Operations staff, define granular View/Edit/Delete rights."
         action={
           hasPermission('staff', 'create') && (
-            <button
-              onClick={() => openModal()}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition cursor-pointer"
-            >
-              <Plus size={16} />
-              <span>Add Staff Member</span>
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => openModal(null, 'owner')}
+                className="inline-flex items-center gap-2 px-4 py-2.5 bg-gradient-to-r from-amber-500 via-amber-600 to-yellow-600 hover:from-amber-600 hover:to-yellow-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-sm transition cursor-pointer"
+              >
+                <Crown size={16} />
+                <span>👑 Add New Owner</span>
+              </button>
+              <button
+                onClick={() => openModal(null, 'marketing')}
+                className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition cursor-pointer"
+              >
+                <Plus size={16} />
+                <span>Add Staff Member</span>
+              </button>
+            </div>
           )
         }
       />
 
       {/* Top Stat Summary */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          title="Total Staff Members"
+          title="Total Team Accounts"
           value={staffList.length}
           subtitle="All team accounts registered"
           icon={UserCog}
           color="indigo"
         />
         <StatCard
-          title="Field Marketing Personnel"
+          title="👑 Business Owners"
+          value={staffList.filter((s) => s.role === 'owner').length}
+          subtitle="Full unrestricted authority"
+          icon={Crown}
+          color="amber"
+        />
+        <StatCard
+          title="Field Marketing Reps"
           value={staffList.filter((s) => s.role === 'marketing').length}
-          subtitle="Library & Gym field reps"
+          subtitle="Library & Gym field staff"
           icon={ShieldCheck}
           color="emerald"
         />
@@ -275,15 +293,30 @@ export const StaffManagement = () => {
 
                       {/* Role */}
                       <td className="px-5 py-4 whitespace-nowrap">
-                        <Badge variant="purple" size="sm">
-                          {ROLE_PRESETS[staff.role]?.label || staff.roleLabel || staff.role}
-                        </Badge>
+                        {staff.role === 'owner' ? (
+                          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-gradient-to-r from-amber-100 to-yellow-100 text-amber-900 border border-amber-300 shadow-2xs">
+                            <Crown size={13} className="text-amber-600" />
+                            <span>Business Owner</span>
+                          </span>
+                        ) : (
+                          <Badge variant={staff.role === 'manager' ? 'info' : 'purple'} size="sm">
+                            {ROLE_PRESETS[staff.role]?.label || staff.roleLabel || staff.role}
+                          </Badge>
+                        )}
                       </td>
 
                       {/* Base Salary */}
                       <td className="px-5 py-4 whitespace-nowrap font-bold text-slate-800 text-xs">
-                        ₹{payroll.baseSalary.toLocaleString('en-IN')}
-                        <span className="text-[10px] font-normal text-slate-400 block">per month</span>
+                        {staff.role === 'owner' && payroll.baseSalary === 0 ? (
+                          <span className="text-[11px] font-bold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 block w-fit">
+                            👑 Full Control / Equity
+                          </span>
+                        ) : (
+                          <>
+                            ₹{payroll.baseSalary.toLocaleString('en-IN')}
+                            <span className="text-[10px] font-normal text-slate-400 block">per month</span>
+                          </>
+                        )}
                       </td>
 
                       {/* Commission Rate */}
@@ -556,19 +589,31 @@ export const StaffManagement = () => {
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
               Apply Role Preset
             </label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
               {Object.entries(ROLE_PRESETS).filter(([key]) => key !== 'custom').map(([key, preset]) => (
                 <button
                   type="button"
                   key={key}
                   onClick={() => handleRolePresetChange(key)}
-                  className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+                  className={`p-3 rounded-xl border text-left transition cursor-pointer relative overflow-hidden ${
                     form.role === key
-                      ? 'bg-blue-50 border-blue-600 ring-2 ring-blue-600/10'
+                      ? key === 'owner'
+                        ? 'bg-amber-50 border-amber-500 ring-2 ring-amber-500/20 shadow-xs'
+                        : 'bg-blue-50 border-blue-600 ring-2 ring-blue-600/10'
+                      : key === 'owner'
+                      ? 'bg-amber-50/40 border-amber-200 hover:bg-amber-50'
                       : 'bg-white border-slate-200 hover:bg-slate-50'
                   }`}
                 >
-                  <p className="text-xs font-bold text-slate-900">{preset.label}</p>
+                  {key === 'owner' && (
+                    <span className="absolute top-2 right-2 px-1.5 py-0.5 bg-amber-200 text-amber-900 text-[9px] font-black rounded uppercase">
+                      Full Access
+                    </span>
+                  )}
+                  <p className="text-xs font-bold text-slate-900 flex items-center gap-1">
+                    {key === 'owner' && <Crown size={13} className="text-amber-600 shrink-0" />}
+                    <span className="truncate">{preset.label}</span>
+                  </p>
                   <p className="text-[10px] text-slate-500 mt-1 line-clamp-2 leading-relaxed">
                     {preset.description}
                   </p>
@@ -576,6 +621,21 @@ export const StaffManagement = () => {
               ))}
             </div>
           </div>
+
+          {/* Owner Supreme Authority Banner */}
+          {form.role === 'owner' && (
+            <div className="p-3 bg-gradient-to-r from-amber-50 via-amber-100/60 to-yellow-50 border border-amber-300 rounded-xl flex items-center gap-3 text-xs text-amber-950 font-bold shadow-2xs">
+              <div className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <Crown size={16} />
+              </div>
+              <div>
+                <p className="text-xs font-black text-amber-950">👑 Supreme Authority Account</p>
+                <p className="text-[11px] text-amber-800 font-medium">
+                  Business Owner accounts have 100% full access to all platform modules, settings, staff credentials, and financial ledger.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Granular Permission Matrix */}
           <div>

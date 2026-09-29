@@ -132,14 +132,16 @@ export const AuthProvider = ({ children }) => {
           throw new Error('Incorrect staff password.');
         }
 
+        const isOwner = staffMember.role === 'owner' || staffMember.role === 'super_admin';
         const staffSession = {
           uid: staffMember.id,
           id: staffMember.id,
           email: staffMember.email,
-          displayName: staffMember.name || 'Staff Member',
+          displayName: staffMember.name || (isOwner ? '👑 Business Owner' : 'Staff Member'),
           name: staffMember.name || 'Staff Member',
-          role: staffMember.role || 'marketing',
-          roleLabel: staffMember.roleLabel || 'Staff Member',
+          role: isOwner ? 'super_admin' : (staffMember.role || 'marketing'),
+          originalRole: staffMember.role,
+          roleLabel: staffMember.roleLabel || (isOwner ? '👑 Business Owner' : 'Staff Member'),
           permissions: staffMember.permissions || {},
           phone: staffMember.phone || '',
           compensation: staffMember.compensation || {},
@@ -197,7 +199,7 @@ export const AuthProvider = ({ children }) => {
 
   const hasPermission = (moduleName, action = 'view') => {
     if (!user) return false;
-    if (!user.role || user.role === 'super_admin') return true;
+    if (!user.role || user.role === 'super_admin' || user.role === 'owner') return true;
 
     const modulePerms = user.permissions?.[moduleName];
     if (modulePerms && modulePerms[action] !== undefined) {
