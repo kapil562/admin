@@ -40,6 +40,7 @@ import {
   Loader2,
   X,
   Camera,
+  Crown,
   Image as ImageIcon,
   Flame,
   Zap,
@@ -645,12 +646,58 @@ export const FieldMarketing = () => {
     }
   };
 
+  // ── Combined list of registered staff + Admin / Owner ───────────────────────
+  const allStaffAndAdmins = useMemo(() => {
+    const list = [...staffList];
+    const registeredNames = new Set(staffList.map((s) => (s.name || '').toLowerCase()));
+    const registeredIds = new Set(staffList.map((s) => s.id));
+
+    // Find any distinct staff/admin in visits who isn't in staffList
+    visits.forEach((v) => {
+      const name = (v.staffName || '').trim();
+      const id = v.staffId || name;
+      if (name && !registeredNames.has(name.toLowerCase()) && !registeredIds.has(id)) {
+        registeredNames.add(name.toLowerCase());
+        registeredIds.add(id);
+        const isAdmin =
+          name.toLowerCase().includes('admin') ||
+          String(id).toLowerCase().includes('admin') ||
+          name.toLowerCase().includes('owner');
+
+        list.unshift({
+          id: id,
+          name: name,
+          role: isAdmin ? 'owner' : 'marketing',
+          roleLabel: isAdmin ? '👑 Admin / Owner' : 'Field Rep',
+          isAdmin: isAdmin,
+        });
+      }
+    });
+
+    // Also ensure currently logged-in Admin is included if isSuperAdmin
+    if (isSuperAdmin && user) {
+      const myName = (user.displayName || user.name || 'Administrator').trim();
+      const myId = user.uid || user.id || 'admin';
+      if (!registeredNames.has(myName.toLowerCase()) && !registeredIds.has(myId)) {
+        list.unshift({
+          id: myId,
+          name: myName,
+          role: 'owner',
+          roleLabel: '👑 Administrator / Owner',
+          isAdmin: true,
+        });
+      }
+    }
+
+    return list;
+  }, [staffList, visits, isSuperAdmin, user]);
+
   // ── Filtering logic ────────────────────────────────────────────────────────
   const baseVisits = useMemo(() => {
     if (isSuperAdmin) {
       if (selectedStaffFilter === 'All') return visits;
       return visits.filter((v) => {
-        const staffObj = staffList.find((s) => s.id === selectedStaffFilter);
+        const staffObj = allStaffAndAdmins.find((s) => s.id === selectedStaffFilter);
         return (
           v.staffId === selectedStaffFilter ||
           (staffObj && v.staffName?.toLowerCase() === staffObj.name?.toLowerCase()) ||
@@ -663,7 +710,7 @@ export const FieldMarketing = () => {
     return visits.filter(
       (v) => v.staffId === myId || (v.staffName && v.staffName.toLowerCase() === myName)
     );
-  }, [visits, isSuperAdmin, selectedStaffFilter, user, staffList]);
+  }, [visits, isSuperAdmin, selectedStaffFilter, user, allStaffAndAdmins]);
 
   const filteredVisits = useMemo(() => {
     const todayStr = new Date().toISOString().split('T')[0];
@@ -1273,8 +1320,8 @@ export const FieldMarketing = () => {
         />
       </div>
 
-      {/* ═══ Admin Staff Performance Panel ═══ */}
-      {isSuperAdmin && staffList.length > 0 && (
+      {/* ═══ Admin & Staff Performance Panel ═══ */}
+      {isSuperAdmin && allStaffAndAdmins.length > 0 && (
         <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-3">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
             <div className="flex items-center gap-2">
@@ -1282,8 +1329,12 @@ export const FieldMarketing = () => {
                 <Users size={16} />
               </div>
               <div>
-                <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">Marketing Staff Performance</h3>
-                <p className="text-[11px] text-slate-500">Click a staff member to filter their visits</p>
+                <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">
+                  Marketing Team & Admin Performance
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Click any staff or admin to filter their visits (Admin ki entries bhi count hongi)
+                </p>
               </div>
             </div>
             {selectedStaffFilter !== 'All' && (
@@ -1297,14 +1348,15 @@ export const FieldMarketing = () => {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1">
-            {staffList.map((staff) => {
+            {allStaffAndAdmins.map((staff) => {
               const staffVisits = visits.filter(
-                (v) => v.staffId === staff.id || v.staffName?.toLowerCase() === staff.name.toLowerCase()
+                (v) => v.staffId === staff.id || (v.staffName && v.staffName.toLowerCase() === staff.name.toLowerCase())
               );
               const todayVisits = staffVisits.filter((v) => (v.createdAt || '').startsWith(todayStr)).length;
               const staffDemos = staffVisits.filter((v) => v.demoGiven).length;
               const staffDeals = staffVisits.filter((v) => v.status === 'Deal Closed').length;
               const isSelected = selectedStaffFilter === staff.id;
+              const isOwnerOrAdmin = staff.isAdmin || staff.role === 'owner';
 
               return (
                 <div
@@ -1312,17 +1364,24 @@ export const FieldMarketing = () => {
                   onClick={() => setSelectedStaffFilter(isSelected ? 'All' : staff.id)}
                   className={`p-3.5 rounded-xl border transition cursor-pointer flex flex-col justify-between ${
                     isSelected
-                      ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/20 shadow-xs'
+                      ? isOwnerOrAdmin
+                        ? 'bg-amber-50/90 border-amber-500 ring-2 ring-amber-500/20 shadow-xs'
+                        : 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/20 shadow-xs'
+                      : isOwnerOrAdmin
+                      ? 'bg-amber-50/40 border-amber-200 hover:bg-amber-50/70'
                       : 'bg-slate-50/60 border-slate-200 hover:bg-slate-100/70'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <p className="text-xs font-bold text-slate-900">{staff.name}</p>
+                      <p className="text-xs font-bold text-slate-900 flex items-center gap-1">
+                        {isOwnerOrAdmin && <Crown size={12} className="text-amber-600 shrink-0" />}
+                        <span>{staff.name}</span>
+                      </p>
                       <p className="text-[10px] text-slate-500">{staff.roleLabel || 'Marketing Rep'}</p>
                     </div>
                     <div className="text-right">
-                      <Badge variant={isSelected ? 'info' : 'neutral'} size="sm">
+                      <Badge variant={isSelected ? (isOwnerOrAdmin ? 'warning' : 'info') : 'neutral'} size="sm">
                         {staffVisits.length} visits
                       </Badge>
                       {todayVisits > 0 && (
@@ -1354,20 +1413,20 @@ export const FieldMarketing = () => {
             />
           </div>
 
-          {isSuperAdmin && staffList.length > 0 && (
+          {isSuperAdmin && allStaffAndAdmins.length > 0 && (
             <select
               value={selectedStaffFilter}
               onChange={(e) => setSelectedStaffFilter(e.target.value)}
               className="w-full sm:w-auto px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-blue-600 cursor-pointer"
             >
-              <option value="All">All Staff ({visits.length})</option>
-              {staffList.map((s) => {
+              <option value="All">All Staff & Admins ({visits.length})</option>
+              {allStaffAndAdmins.map((s) => {
                 const sCount = visits.filter(
-                  (v) => v.staffId === s.id || v.staffName?.toLowerCase() === s.name.toLowerCase()
+                  (v) => v.staffId === s.id || (v.staffName && v.staffName.toLowerCase() === s.name.toLowerCase())
                 ).length;
                 return (
                   <option key={s.id} value={s.id}>
-                    {s.name} ({sCount})
+                    {s.isAdmin ? '👑 ' : ''}{s.name} ({sCount})
                   </option>
                 );
               })}
@@ -1565,20 +1624,45 @@ export const FieldMarketing = () => {
 
                       {/* Staff & Exact Timestamp */}
                       <td className="px-5 py-4 text-xs whitespace-nowrap">
-                        <div className="flex items-center gap-2">
-                          <div className="w-7 h-7 rounded-lg bg-blue-100 text-blue-800 font-extrabold text-xs flex items-center justify-center shrink-0 shadow-2xs">
-                            {(visit.staffName || 'S').substring(0, 1).toUpperCase()}
-                          </div>
-                          <div>
-                            <div className="font-bold text-slate-900">{visit.staffName || 'Marketing Rep'}</div>
-                            <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1 mt-0.5">
-                              <span>📅 {formatDateTime(visit.createdAt).date}</span>
-                              {formatDateTime(visit.createdAt).time && (
-                                <span className="text-blue-600 font-bold">• 🕒 {formatDateTime(visit.createdAt).time}</span>
-                              )}
+                        {(() => {
+                          const isAdm =
+                            (visit.staffName || '').toLowerCase().includes('admin') ||
+                            (visit.staffName || '').toLowerCase().includes('owner') ||
+                            String(visit.staffId || '').toLowerCase().includes('admin');
+                          return (
+                            <div className="flex items-center gap-2">
+                              <div
+                                className={`w-7 h-7 rounded-lg font-extrabold text-xs flex items-center justify-center shrink-0 shadow-2xs ${
+                                  isAdm
+                                    ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                    : 'bg-blue-100 text-blue-800'
+                                }`}
+                              >
+                                {isAdm ? (
+                                  <Crown size={14} className="text-amber-700" />
+                                ) : (
+                                  (visit.staffName || 'S').substring(0, 1).toUpperCase()
+                                )}
+                              </div>
+                              <div>
+                                <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                                  <span>{visit.staffName || 'Marketing Rep'}</span>
+                                  {isAdm && (
+                                    <span className="text-[9px] font-black uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300 px-1 py-0.2 rounded">
+                                      Admin
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1 mt-0.5">
+                                  <span>📅 {formatDateTime(visit.createdAt).date}</span>
+                                  {formatDateTime(visit.createdAt).time && (
+                                    <span className="text-blue-600 font-bold">• 🕒 {formatDateTime(visit.createdAt).time}</span>
+                                  )}
+                                </div>
+                              </div>
                             </div>
-                          </div>
-                        </div>
+                          );
+                        })()}
 
                         {visit.checkInTime && (
                           <div className="text-[10px] text-slate-500 mt-1 pl-9">
