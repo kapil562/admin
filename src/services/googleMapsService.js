@@ -558,15 +558,36 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
           formatted = formatted.filter((p) => p.distance == null || p.distance <= maxDistanceWithTolerance);
         }
 
-        // If maxResults is specified, limit results count; otherwise keep all places found
-        if (maxResults && Number(maxResults) > 0 && formatted.length > Number(maxResults)) {
-          formatted = formatted.slice(0, Number(maxResults));
-        }
-
+        // 1. Sort ALL found places by straight-line distance from user's current location first
         if (lat && lng) {
           formatted.sort((a, b) => (a.distance ?? 999999) - (b.distance ?? 999999));
-          const enriched = await enrichWithRealRoadDistances(lat, lng, formatted);
-          return enriched;
+        }
+
+        // 2. Take top candidate nearest places for road route enrichment (up to 25 places)
+        const candidateLimit = maxResults && Number(maxResults) > 0
+          ? Math.min(Math.max(Number(maxResults), 15), 25)
+          : 25;
+        const candidates = formatted.slice(0, candidateLimit);
+
+        if (lat && lng && candidates.length > 0) {
+          // Enrich top candidates with actual Google road driving distance & duration
+          const enriched = await enrichWithRealRoadDistances(lat, lng, candidates);
+          // Re-sort strictly by true road distance
+          enriched.sort((a, b) => (a.distance ?? 999999) - (b.distance ?? 999999));
+
+          const remaining = formatted.slice(candidateLimit);
+          const finalAll = [...enriched, ...remaining];
+
+          // 3. Slicing happens AFTER sorting, ensuring the TRUE nearest N places are returned!
+          if (maxResults && Number(maxResults) > 0) {
+            return finalAll.slice(0, Number(maxResults));
+          }
+          return finalAll;
+        }
+
+        // If no lat/lng available, slice to maxResults
+        if (maxResults && Number(maxResults) > 0) {
+          return formatted.slice(0, Number(maxResults));
         }
         return formatted;
       }

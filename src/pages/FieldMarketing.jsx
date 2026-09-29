@@ -269,7 +269,7 @@ export const FieldMarketing = () => {
       return;
     }
     const loc = myLocation || DEFAULT_GUNA_COORDS;
-    performSearch(loc, activeCategory, manualSearchQuery);
+    performSearch(loc, activeCategory, manualSearchQuery, searchRadius, searchLimit);
   };
 
   // ── Form helpers ───────────────────────────────────────────────────────────
