@@ -51,7 +51,7 @@ const VISIT_STATUSES = [
 ];
 
 const RADIUS_OPTIONS = [
-  { value: 0, label: 'Radius: Default (All)' },
+  { value: '', label: '-- Select Radius (km) --' },
   { value: 5000, label: '5 km Radius' },
   { value: 10000, label: '10 km Radius' },
   { value: 20000, label: '20 km Radius' },
@@ -68,7 +68,7 @@ const RADIUS_OPTIONS = [
 ];
 
 const LIMIT_OPTIONS = [
-  { value: 0, label: 'Places: Default (All)' },
+  { value: '', label: '-- Select Places (Count) --' },
   { value: 5, label: '5 Places' },
   { value: 10, label: '10 Places' },
   { value: 20, label: '20 Places' },
@@ -109,9 +109,9 @@ export const FieldMarketing = () => {
   const [nearbyLibraries, setNearbyLibraries] = useState([]);
   const [searchingNearby, setSearchingNearby] = useState(false);
   const [nearbySearchDone, setNearbySearchDone] = useState(false);
-  const [searchRadius, setSearchRadius] = useState(0);
+  const [searchRadius, setSearchRadius] = useState('');
   const [customRadiusMode, setCustomRadiusMode] = useState(false);
-  const [searchLimit, setSearchLimit] = useState(0);
+  const [searchLimit, setSearchLimit] = useState('');
   const [customLimitMode, setCustomLimitMode] = useState(false);
   const [manualSearchQuery, setManualSearchQuery] = useState('');
   const [showDiscovery, setShowDiscovery] = useState(true);
@@ -259,8 +259,8 @@ export const FieldMarketing = () => {
     setManualSearchQuery('');
     setNearbyLibraries([]);
     setNearbySearchDone(false);
-    setSearchRadius(0);
-    setSearchLimit(0);
+    setSearchRadius('');
+    setSearchLimit('');
     setCustomRadiusMode(false);
     setCustomLimitMode(false);
   };
@@ -271,8 +271,19 @@ export const FieldMarketing = () => {
       toast(`Type a ${activeCategory === 'gym' ? 'gym' : 'library'} name or area to search`, { icon: '🔍' });
       return;
     }
+
+    const hasRadius = searchRadius !== '' && Number(searchRadius) > 0;
+    const hasLimit = searchLimit !== '' && Number(searchLimit) > 0;
+
+    if (!hasRadius && !hasLimit) {
+      toast.error('Radius (km) ya Number of Places me se kisi ek me entry hona zaroori hai!');
+      return;
+    }
+
     const loc = myLocation || DEFAULT_GUNA_COORDS;
-    performSearch(loc, activeCategory, manualSearchQuery, searchRadius, searchLimit);
+    const radiusVal = hasRadius ? Number(searchRadius) : null;
+    const limitVal = hasLimit ? Number(searchLimit) : null;
+    performSearch(loc, activeCategory, manualSearchQuery, radiusVal, limitVal);
   };
 
   // ── Form helpers ───────────────────────────────────────────────────────────
@@ -705,10 +716,15 @@ export const FieldMarketing = () => {
                     type="number"
                     min="1"
                     max="300"
-                    value={searchRadius / 1000}
+                    value={searchRadius ? searchRadius / 1000 : ''}
                     onChange={(e) => {
-                      const val = Math.max(1, Math.min(300, Number(e.target.value) || 1));
-                      setSearchRadius(val * 1000);
+                      const raw = e.target.value;
+                      if (raw === '') {
+                        setSearchRadius('');
+                      } else {
+                        const val = Math.max(1, Math.min(300, Number(raw) || 1));
+                        setSearchRadius(val * 1000);
+                      }
                     }}
                     onKeyDown={(e) => e.key === 'Enter' && handleManualSearch(e)}
                     className="w-14 text-xs font-black text-blue-700 outline-none bg-transparent"
@@ -732,10 +748,14 @@ export const FieldMarketing = () => {
                     if (e.target.value === 'custom') {
                       setCustomRadiusMode(true);
                     } else {
-                      const r = Number(e.target.value);
+                      const r = e.target.value === '' ? '' : Number(e.target.value);
                       setSearchRadius(r);
-                      if (manualSearchQuery.trim()) {
-                        performSearch(myLocation, activeCategory, manualSearchQuery, r, searchLimit);
+                      if (nearbySearchDone && manualSearchQuery.trim()) {
+                        const hasR = r !== '' && Number(r) > 0;
+                        const hasL = searchLimit !== '' && Number(searchLimit) > 0;
+                        if (hasR || hasL) {
+                          performSearch(myLocation, activeCategory, manualSearchQuery, hasR ? Number(r) : null, hasL ? Number(searchLimit) : null);
+                        }
                       }
                     }
                   }}
@@ -760,8 +780,13 @@ export const FieldMarketing = () => {
                     max="500"
                     value={searchLimit || ''}
                     onChange={(e) => {
-                      const val = Math.max(1, Math.min(500, Number(e.target.value) || 1));
-                      setSearchLimit(val);
+                      const raw = e.target.value;
+                      if (raw === '') {
+                        setSearchLimit('');
+                      } else {
+                        const val = Math.max(1, Math.min(500, Number(raw) || 1));
+                        setSearchLimit(val);
+                      }
                     }}
                     onKeyDown={(e) => e.key === 'Enter' && handleManualSearch(e)}
                     className="w-14 text-xs font-black text-blue-700 outline-none bg-transparent"
@@ -785,10 +810,14 @@ export const FieldMarketing = () => {
                     if (e.target.value === 'custom') {
                       setCustomLimitMode(true);
                     } else {
-                      const l = Number(e.target.value);
+                      const l = e.target.value === '' ? '' : Number(e.target.value);
                       setSearchLimit(l);
-                      if (manualSearchQuery.trim()) {
-                        performSearch(myLocation, activeCategory, manualSearchQuery, searchRadius, l);
+                      if (nearbySearchDone && manualSearchQuery.trim()) {
+                        const hasR = searchRadius !== '' && Number(searchRadius) > 0;
+                        const hasL = l !== '' && Number(l) > 0;
+                        if (hasR || hasL) {
+                          performSearch(myLocation, activeCategory, manualSearchQuery, hasR ? Number(searchRadius) : null, hasL ? Number(l) : null);
+                        }
                       }
                     }
                   }}
