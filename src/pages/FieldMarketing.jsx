@@ -206,25 +206,21 @@ const initialFormState = {
 };
 
 const RADIUS_OPTIONS = [
-  { value: '', label: '-- Select Radius (km) --' },
+  { value: '', label: '-- Any Distance (Nearest First) --' },
   { value: 5000, label: '5 km Radius' },
   { value: 10000, label: '10 km Radius' },
   { value: 20000, label: '20 km Radius' },
   { value: 30000, label: '30 km Radius' },
-  { value: 40000, label: '40 km Radius' },
   { value: 50000, label: '50 km Radius' },
-  { value: 60000, label: '60 km Radius' },
-  { value: 70000, label: '70 km Radius' },
-  { value: 80000, label: '80 km Radius' },
   { value: 100000, label: '100 km Radius' },
-  { value: 150000, label: '150 km Radius' },
   { value: 200000, label: '200 km Radius' },
   { value: 300000, label: '300 km Radius' },
+  { value: 500000, label: '500 km Radius' },
+  { value: 1000000, label: '1000 km Radius' },
 ];
 
 const LIMIT_OPTIONS = [
-  { value: '', label: '-- Select Places (Count) --' },
-  { value: 5, label: '5 Places' },
+  { value: '', label: '-- Auto (100 Nearest Places) --' },
   { value: 10, label: '10 Places' },
   { value: 20, label: '20 Places' },
   { value: 30, label: '30 Places' },
@@ -234,6 +230,7 @@ const LIMIT_OPTIONS = [
   { value: 150, label: '150 Places' },
   { value: 200, label: '200 Places' },
   { value: 300, label: '300 Places' },
+  { value: 500, label: '500 Places' },
 ];
 
 const DATE_FILTERS = [
@@ -463,7 +460,8 @@ export const FieldMarketing = () => {
       if (!query) {
         query = category === 'gym' ? 'gym fitness center' : 'study library reading room';
       }
-      const res = await searchLibrariesByText(query, targetLoc.latitude, targetLoc.longitude, radius, limit);
+      const targetLimit = limit ? Number(limit) : 100;
+      const res = await searchLibrariesByText(query, targetLoc.latitude, targetLoc.longitude, radius, targetLimit);
       const resultsList = res || [];
       setNearbyLibraries(resultsList);
       setNearbySearchDone(true);
@@ -1804,20 +1802,20 @@ export const FieldMarketing = () => {
               />
             </div>
             <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-              {/* Radius Control: Dropdown with 5-300km OR Type Custom km */}
+              {/* Radius Control: Dropdown with 5-1000km OR Type Custom km */}
               {customRadiusMode ? (
                 <div className="flex items-center bg-slate-50 border border-blue-500 rounded-xl px-2.5 py-1.5 shadow-xs">
                   <input
                     type="number"
                     min="1"
-                    max="300"
+                    max="1000"
                     value={searchRadius ? searchRadius / 1000 : ''}
                     onChange={(e) => {
                       const raw = e.target.value;
                       if (raw === '') {
                         setSearchRadius('');
                       } else {
-                        const val = Math.max(1, Math.min(300, Number(raw) || 1));
+                        const val = Math.max(1, Math.min(1000, Number(raw) || 1));
                         setSearchRadius(val * 1000);
                       }
                     }}
@@ -1855,7 +1853,7 @@ export const FieldMarketing = () => {
                     }
                   }}
                   className="flex-1 sm:flex-none px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
-                  title="Search Radius (5 km to 300 km)"
+                  title="Search Radius (5 km to 1000 km)"
                 >
                   {RADIUS_OPTIONS.map((r) => (
                     <option key={r.value} value={r.value}>

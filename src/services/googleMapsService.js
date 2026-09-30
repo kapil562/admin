@@ -316,63 +316,7 @@ export const getPlaceDetails = async (placeId) => {
  * Uses modern Place.searchByText/searchNearby if available, with fallback to PlacesService
  */
 export const searchNearbyLibraries = async (lat, lng, radiusMeters = 5000) => {
-  await loadGoogleMaps();
-
-  // Try modern Place API (New) first (required for new accounts after March 2025)
-  if (typeof google?.maps?.places?.Place?.searchByText === 'function') {
-    try {
-      const allResults = new Map();
-      const queries = ['study library', 'study point', 'reading room', 'library'];
-
-      for (const q of queries) {
-        try {
-          const { places } = await google.maps.places.Place.searchByText({
-            textQuery: q,
-            fields: ['id', 'displayName', 'formattedAddress', 'location', 'rating', 'userRatingCount', 'regularOpeningHours'],
-            locationBias: {
-              center: { lat, lng },
-              radius: radiusMeters,
-            },
-            maxResultCount: 20,
-          });
-
-          if (places && Array.isArray(places)) {
-            places.forEach((p) => {
-              if (p.id && !allResults.has(p.id)) {
-                const placeLat = typeof p.location?.lat === 'function' ? p.location.lat() : p.location?.lat;
-                const placeLng = typeof p.location?.lng === 'function' ? p.location.lng() : p.location?.lng;
-                const distance = (placeLat != null && placeLng != null) ? calculateDistance(lat, lng, placeLat, placeLng) : null;
-
-                allResults.set(p.id, {
-                  placeId: p.id,
-                  name: p.displayName || '',
-                  address: p.formattedAddress || '',
-                  rating: p.rating || null,
-                  totalRatings: p.userRatingCount || 0,
-                  lat: placeLat,
-                  lng: placeLng,
-                  distance,
-                  distanceFormatted: formatDistance(distance),
-                  isOpen: p.regularOpeningHours?.isOpen?.() ?? null,
-                });
-              }
-            });
-          }
-        } catch (subErr) {
-          console.warn('Place.searchByText query error:', subErr);
-        }
-      }
-
-      if (allResults.size > 0) {
-        return Array.from(allResults.values()).sort((a, b) => (a.distance ?? 999999) - (b.distance ?? 999999));
-      }
-    } catch (newApiErr) {
-      console.warn('Modern Place API error, trying fallback:', newApiErr);
-    }
-  }
-
-  // Fallback to legacy PlacesService
-  return fallbackPlacesServiceSearch(lat, lng, radiusMeters);
+  return searchLibrariesByText('study library reading room', lat, lng, radiusMeters, 100);
 };
 
 const fallbackPlacesServiceSearch = (lat, lng, radiusMeters) => {
@@ -454,39 +398,70 @@ const fallbackPlacesServiceSearch = (lat, lng, radiusMeters) => {
 export const searchLibrariesByText = async (query, lat, lng, radius = null, maxResults = null) => {
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
-  // Filter out irrelevant results like toy shops, gift shops
+  // Filter out irrelevant businesses (toys, restaurants, dairies, clothes, salons, clinics, etc.)
   const isRelevantPlace = (p) => {
     const name = (p.displayName?.text || p.displayName || p.name || '').toLowerCase();
     const address = (p.formattedAddress || p.address || '').toLowerCase();
-    if (name.includes('toy world') || name.includes('toy library') || name.includes('khilone') || name.includes('toys')) {
-      return false;
-    }
-    return true;
+    const text = `${name} ${address}`;
+    const badWords = [
+      'toy world', 'toy library', 'khilone', 'toys',
+      'restaurant', 'dairy', 'sweets', 'mithai', 'dhaba', 'hotel', 'cafe',
+      'bhojnalaya', 'bakery', 'fast food', 'pizza', 'burger', 'tea stall', 'chai',
+      'clothing', 'garment', 'textile', 'saree', 'footwear', 'shoe',
+      'electronics', 'hardware', 'saloon', 'beauty parlour', 'spa',
+      'pharmacy', 'medical store', 'chemist', 'hospital', 'pathology'
+    ];
+    return !badWords.some((w) => text.includes(w));
   };
 
-  // 1. Direct REST Places API (New) with pagination and multi-query expansion
+  // 1. Direct REST Places API (New) with proper pagination and radius handling
   if (apiKey) {
     try {
-      const isLargeOrUnlimited = !maxResults || Number(maxResults) === 0 || Number(maxResults) > 60;
-      const isGym = query.toLowerCase().includes('gym') || query.toLowerCase().includes('fitness');
+      const targetCount = maxResults && Number(maxResults) > 0 ? Number(maxResults) : 100;
+      const cleanQ = (query || '').trim();
+      const isGym = cleanQ.toLowerCase().includes('gym') || cleanQ.toLowerCase().includes('fitness');
 
-      // Expand queries to break past Google's single-query 60-result maximum ceiling
-      let queryList = [query];
-      if (isLargeOrUnlimited) {
-        if (isGym) {
-          queryList = [
-            query,
-            'fitness center gym',
-            'health club workout gym',
-            'crossfit fitness gym',
-          ];
+      let queryList = [];
+      if (cleanQ && cleanQ !== 'study library reading room' && cleanQ !== 'gym fitness center') {
+        queryList = [cleanQ];
+        // If searching a specific query and wanting a larger count, add contextual query variations
+        if (targetCount > 20) {
+          if (isGym) {
+            queryList.push(`${cleanQ} gym`, 'gym fitness center', 'fitness club gym');
+          } else {
+            queryList.push(`${cleanQ} library`, 'study library', 'reading room library', 'study point library', 'pustakalaya');
+          }
+        }
+      } else {
+        queryList = isGym
+          ? ['gym fitness center', 'fitness club gym', 'workout health gym', 'crossfit gym']
+          : ['study library', 'reading room library', 'study point library', 'pustakalaya', 'self study digital library', 'library'];
+      }
+
+      // Location configuration: handle circles <= 50km and bounding box rectangles > 50km (up to 1000km)
+      let locationConfig = {};
+      if (lat && lng) {
+        if (radius && Number(radius) > 50000) {
+          const radiusKm = Number(radius) / 1000;
+          const dLat = radiusKm / 111;
+          const dLng = radiusKm / (111 * Math.cos((lat * Math.PI) / 180));
+          locationConfig = {
+            locationRestriction: {
+              rectangle: {
+                low: { latitude: Math.max(-90, lat - dLat), longitude: Math.max(-180, lng - dLng) },
+                high: { latitude: Math.min(90, lat + dLat), longitude: Math.min(180, lng + dLng) },
+              },
+            },
+          };
         } else {
-          queryList = [
-            query,
-            'study library reading room',
-            'study point library',
-            'public library pustakalaya',
-          ];
+          locationConfig = {
+            locationBias: {
+              circle: {
+                center: { latitude: lat, longitude: lng },
+                radius: Math.min(Number(radius) || 50000, 50000),
+              },
+            },
+          };
         }
       }
 
@@ -494,43 +469,14 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
 
       for (const q of queryList) {
         let pageToken = null;
-        const targetPagesPerQuery = isLargeOrUnlimited ? 3 : Math.ceil(Number(maxResults) / 20);
+        const initialBody = {
+          textQuery: q,
+          pageSize: 20,
+          ...locationConfig,
+        };
 
-        for (let page = 0; page < targetPagesPerQuery; page++) {
-          const body = {
-            textQuery: q,
-            pageSize: 20,
-          };
-
-          if (lat && lng) {
-            if (radius && Number(radius) > 0) {
-              const userRadiusMeters = Number(radius);
-              if (userRadiusMeters <= 50000.0) {
-                body.locationRestriction = {
-                  circle: {
-                    center: { latitude: lat, longitude: lng },
-                    radius: userRadiusMeters,
-                  },
-                };
-              } else {
-                body.locationBias = {
-                  circle: {
-                    center: { latitude: lat, longitude: lng },
-                    radius: 50000.0,
-                  },
-                };
-              }
-            } else {
-              // No radius restriction requested by user: bias toward current location
-              body.locationBias = {
-                circle: {
-                  center: { latitude: lat, longitude: lng },
-                  radius: 50000.0,
-                },
-              };
-            }
-          }
-
+        for (let page = 0; page < 3; page++) {
+          const body = { ...initialBody };
           if (pageToken) {
             body.pageToken = pageToken;
           }
@@ -548,39 +494,23 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
           if (!res.ok) break;
           const data = await res.json();
           const batch = data.places || [];
+
           for (const p of batch) {
-            if (p.id && !allPlacesMap.has(p.id)) {
-              allPlacesMap.set(p.id, p);
-            }
-          }
+            if (!p.id || allPlacesMap.has(p.id)) continue;
+            if (!isRelevantPlace(p)) continue;
 
-          if (maxResults && Number(maxResults) > 0 && allPlacesMap.size >= Number(maxResults)) {
-            break;
-          }
-
-          if (!data.nextPageToken) break;
-          pageToken = data.nextPageToken;
-          await new Promise((r) => setTimeout(r, 120));
-        }
-
-        if (maxResults && Number(maxResults) > 0 && allPlacesMap.size >= Number(maxResults)) {
-          break;
-        }
-      }
-
-      if (allPlacesMap.size > 0) {
-        const uniquePlaces = Array.from(allPlacesMap.values());
-
-        let formatted = uniquePlaces
-          .filter(isRelevantPlace)
-          .map((p) => {
             const placeLat = p.location?.latitude;
             const placeLng = p.location?.longitude;
             const distance = (lat && lng && placeLat != null && placeLng != null)
               ? calculateDistance(lat, lng, placeLat, placeLng)
               : null;
 
-            return {
+            // Strict user radius filtering
+            if (radius && Number(radius) > 0 && distance != null && distance > Number(radius)) {
+              continue;
+            }
+
+            allPlacesMap.set(p.id, {
               placeId: p.id,
               name: p.displayName?.text || p.displayName || '',
               address: p.formattedAddress || '',
@@ -591,47 +521,38 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
               distance,
               distanceFormatted: formatDistance(distance),
               isOpen: p.regularOpeningHours?.openNow ?? null,
-            };
-          });
+            });
+          }
 
-        // Strictly filter by radius: Never return places beyond the user's selected radius
-        if (lat && lng && radius && Number(radius) > 0) {
-          const maxRadiusMeters = Number(radius);
-          formatted = formatted.filter((p) => p.distance != null && p.distance <= maxRadiusMeters);
+          if (allPlacesMap.size >= targetCount) break;
+          if (!data.nextPageToken) break;
+          pageToken = data.nextPageToken;
         }
 
-        // 1. Sort ALL found places by straight-line distance from user's current location first
+        if (allPlacesMap.size >= targetCount) break;
+      }
+
+      if (allPlacesMap.size > 0) {
+        let formatted = Array.from(allPlacesMap.values());
+
+        // Sort strictly by straight-line distance from user's current location
         if (lat && lng) {
           formatted.sort((a, b) => (a.distance ?? 999999) - (b.distance ?? 999999));
         }
 
-        // 2. Take top candidate nearest places for road route enrichment (up to 25 places)
-        const candidateLimit = maxResults && Number(maxResults) > 0
-          ? Math.min(Math.max(Number(maxResults), 15), 25)
-          : 25;
+        // Road route enrichment for top candidate nearest places (up to 25 places)
+        const candidateLimit = Math.min(Math.max(targetCount, 15), 25);
         const candidates = formatted.slice(0, candidateLimit);
 
         if (lat && lng && candidates.length > 0) {
-          // Enrich top candidates with actual Google road driving distance & duration
           const enriched = await enrichWithRealRoadDistances(lat, lng, candidates);
-          // Re-sort strictly by true road distance
           enriched.sort((a, b) => (a.distance ?? 999999) - (b.distance ?? 999999));
-
           const remaining = formatted.slice(candidateLimit);
           const finalAll = [...enriched, ...remaining];
-
-          // 3. Slicing happens AFTER sorting, ensuring the TRUE nearest N places are returned!
-          if (maxResults && Number(maxResults) > 0) {
-            return finalAll.slice(0, Number(maxResults));
-          }
-          return finalAll;
+          return finalAll.slice(0, targetCount);
         }
 
-        // If no lat/lng available, slice to maxResults
-        if (maxResults && Number(maxResults) > 0) {
-          return formatted.slice(0, Number(maxResults));
-        }
-        return formatted;
+        return formatted.slice(0, targetCount);
       }
     } catch (restErr) {
       console.warn('Direct Places REST error, fallback to JS SDK:', restErr);
