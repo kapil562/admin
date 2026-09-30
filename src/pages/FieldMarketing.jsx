@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getFieldVisits, logFieldVisit, updateFieldVisit, updateVisitStatus, deleteFieldVisit, getCurrentGPSLocation } from '../firebase/services/marketingService';
+import { getFieldVisits, logFieldVisit, updateFieldVisit, updateVisitStatus, deleteFieldVisit, getCurrentGPSLocation, logSearchAudit } from '../firebase/services/marketingService';
 import { getStaffUsers } from '../firebase/services/staffService';
 import { searchNearbyLibraries, searchLibrariesByText, formatDistance, getNavigationUrl, getPlaceMapUrl, geocodeAddress, reverseGeocode, parseAddressDetails, getPlaceDetails } from '../services/googleMapsService';
 import { useAuth } from '../context/AuthContext';
@@ -420,15 +420,44 @@ export const FieldMarketing = () => {
         query = category === 'gym' ? 'gym fitness center' : 'study library reading room';
       }
       const res = await searchLibrariesByText(query, targetLoc.latitude, targetLoc.longitude, radius, limit);
-      setNearbyLibraries(res || []);
+      const resultsList = res || [];
+      setNearbyLibraries(resultsList);
       setNearbySearchDone(true);
+
+      // ── Audit Log: Record Google API Call for Field Reports ──────────────
+      try {
+        const pagesCount = Math.ceil(resultsList.length / 20) || 1;
+        const estimatedGrossInr = (pagesCount * 1.5 + 0.4).toFixed(2);
+        await logSearchAudit({
+          staffId: user?.uid || user?.id || 'admin',
+          staffName: user?.displayName || user?.name || (isSuperAdmin ? 'Admin' : 'Staff Member'),
+          staffEmail: user?.email || '',
+          staffRole: user?.role || (isSuperAdmin ? 'Admin' : 'Staff'),
+          query,
+          category: category === 'gym' ? 'Gym' : 'Library',
+          radiusKm: radius ? Number(radius) : null,
+          limitCount: limit ? Number(limit) : null,
+          resultsCount: resultsList.length,
+          pagesCount,
+          estimatedGrossInr: Number(estimatedGrossInr),
+          location: {
+            latitude: targetLoc.latitude,
+            longitude: targetLoc.longitude,
+            accuracy: targetLoc.accuracy || null,
+            locationName: currentLocationName || 'Live Location',
+          },
+          createdAt: new Date().toISOString(),
+        });
+      } catch (logErr) {
+        console.warn('Failed to record search audit log:', logErr);
+      }
     } catch (err) {
       console.error('Search error:', err);
       toast.error(err.message || 'Failed to find nearest places');
     } finally {
       setSearchingNearby(false);
     }
-  }, [activeCategory, myLocation, manualSearchQuery, searchRadius, searchLimit]);
+  }, [activeCategory, myLocation, manualSearchQuery, searchRadius, searchLimit, currentLocationName, user, isSuperAdmin]);
 
   // ── Auto Detect Live Location on Mount (Location detection only, NO auto-search) ──────
   const loadDeviceGPS = useCallback(async (isManual = false) => {

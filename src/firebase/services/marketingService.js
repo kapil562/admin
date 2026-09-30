@@ -257,3 +257,55 @@ export const punchAttendance = async ({ staffId, staffName, type = 'in', locatio
     return { id: existingDoc.id, ...data };
   }
 };
+
+/**
+ * ── Google API Search Audit Trail ──────────────────────────────────────────
+ * Logs every Google Places / Maps discovery search executed by staff or admin.
+ * Records search parameters, results count, and live GPS location at search time.
+ */
+export const logSearchAudit = async (auditData) => {
+  try {
+    const docData = {
+      staffId: auditData.staffId || 'unknown',
+      staffName: auditData.staffName || 'Staff Member',
+      staffEmail: auditData.staffEmail || '',
+      staffRole: auditData.staffRole || 'Staff',
+      query: auditData.query || '',
+      category: auditData.category || 'Library',
+      radiusKm: auditData.radiusKm != null ? Number(auditData.radiusKm) : null,
+      limitCount: auditData.limitCount != null ? Number(auditData.limitCount) : null,
+      resultsCount: Number(auditData.resultsCount) || 0,
+      pagesCount: Number(auditData.pagesCount) || 1,
+      estimatedGrossInr: Number(auditData.estimatedGrossInr) || 0,
+      location: auditData.location || null,
+      createdAt: auditData.createdAt || new Date().toISOString(),
+    };
+    const ref = await addDoc(collection(univoDb, 'field_search_audits'), docData);
+    return { id: ref.id, ...docData };
+  } catch (err) {
+    console.error('Error logging search audit:', err);
+    return null;
+  }
+};
+
+/**
+ * Fetch all Google API search audit logs ordered by newest first
+ */
+export const getSearchAudits = async () => {
+  try {
+    const q = query(collection(univoDb, 'field_search_audits'), orderBy('createdAt', 'desc'));
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch (err) {
+    console.warn('OrderBy createdAt index may be building, falling back to client sort:', err);
+    try {
+      const snap = await getDocs(collection(univoDb, 'field_search_audits'));
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      return list.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    } catch (innerErr) {
+      console.error('Error getting search audits:', innerErr);
+      return [];
+    }
+  }
+};
+

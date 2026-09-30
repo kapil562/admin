@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { getFieldVisits, getAttendanceLogs } from '../firebase/services/marketingService';
+import { getFieldVisits, getAttendanceLogs, getSearchAudits } from '../firebase/services/marketingService';
 import { getStaffUsers, calculateStaffPayroll } from '../firebase/services/staffService';
 import { useAuth } from '../context/AuthContext';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -52,6 +52,10 @@ import {
   PhoneCall,
   BellRing,
   Send,
+  Search,
+  Globe,
+  FileSpreadsheet,
+  Compass,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getCompetitorExpiringLeads } from '../services/salesBoosterHelper';
@@ -60,7 +64,7 @@ export const FieldReports = () => {
   const { user } = useAuth();
   const isSuperAdmin = !user?.role || user.role === 'super_admin' || user.role === 'owner';
 
-  // Active Tab: 'daily_analytics' | 'pipeline_competitor' | 'audit_log'
+  // Active Tab: 'daily_analytics' | 'pipeline_competitor' | 'audit_log' | 'api_search_history'
   const [activeTab, setActiveTab] = useState('daily_analytics');
 
   // Filters for Audit Log & Reports
@@ -72,6 +76,12 @@ export const FieldReports = () => {
   const [search, setSearch] = useState('');
   const [selectedVisit, setSelectedVisit] = useState(null);
   const [previewPhoto, setPreviewPhoto] = useState(null);
+
+  // Filters for Google API Search History
+  const [apiSearchDateRange, setApiSearchDateRange] = useState('all');
+  const [apiSearchStaff, setApiSearchStaff] = useState('All');
+  const [apiSearchCategory, setApiSearchCategory] = useState('All');
+  const [apiSearchQuery, setApiSearchQuery] = useState('');
 
   // 1. Fetch Visits
   const { data: visits = [], isLoading: loadingVisits } = useQuery({
@@ -89,6 +99,12 @@ export const FieldReports = () => {
   const { data: attendanceLogs = [], isLoading: loadingAtt } = useQuery({
     queryKey: ['admin_attendance_logs'],
     queryFn: getAttendanceLogs,
+  });
+
+  // 4. Fetch Google API Search Audits
+  const { data: searchAudits = [], isLoading: loadingSearchAudits } = useQuery({
+    queryKey: ['admin_search_audits'],
+    queryFn: getSearchAudits,
   });
 
   // ── Date Formatting Helpers ────────────────────────────────────────────────
@@ -549,6 +565,150 @@ export const FieldReports = () => {
     toast.success('Field Report CSV exported successfully!');
   };
 
+  // ── Google API Search Audit Filtering & Analytics ─────────────────────────
+  const filteredSearchAudits = useMemo(() => {
+    return searchAudits.filter((item) => {
+      // 1. Staff Filter
+      if (apiSearchStaff !== 'All') {
+        const staffMatch =
+          item.staffId === apiSearchStaff ||
+          (item.staffName && item.staffName.toLowerCase() === apiSearchStaff.toLowerCase());
+        if (!staffMatch) return false;
+      }
+
+      // 2. Category Filter
+      if (apiSearchCategory !== 'All' && item.category !== apiSearchCategory) {
+        return false;
+      }
+
+      // 3. Date Range Filter
+      if (apiSearchDateRange !== 'all') {
+        const itemDate = item.createdAt ? item.createdAt.split('T')[0] : '';
+        const today = new Date().toISOString().split('T')[0];
+        if (apiSearchDateRange === 'today' && itemDate !== today) return false;
+        if (apiSearchDateRange === 'yesterday') {
+          const yest = new Date();
+          yest.setDate(yest.getDate() - 1);
+          const yestStr = yest.toISOString().split('T')[0];
+          if (itemDate !== yestStr) return false;
+        }
+        if (apiSearchDateRange === 'week') {
+          const weekAgo = new Date();
+          weekAgo.setDate(weekAgo.getDate() - 7);
+          const weekAgoStr = weekAgo.toISOString().split('T')[0];
+          if (itemDate < weekAgoStr) return false;
+        }
+      }
+
+      // 4. Keyword Search
+      if (apiSearchQuery.trim()) {
+        const q = apiSearchQuery.toLowerCase();
+        const queryText = (item.query || '').toLowerCase();
+        const staffText = (item.staffName || '').toLowerCase();
+        const locText = (item.location?.locationName || '').toLowerCase();
+        if (!queryText.includes(q) && !staffText.includes(q) && !locText.includes(q)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [searchAudits, apiSearchStaff, apiSearchCategory, apiSearchDateRange, apiSearchQuery]);
+
+  const searchAuditsTodayCount = useMemo(() => {
+    const today = new Date().toISOString().split('T')[0];
+    return searchAudits.filter((a) => a.createdAt && a.createdAt.split('T')[0] === today).length;
+  }, [searchAudits]);
+
+  const totalPlacesDiscovered = useMemo(() => {
+    return filteredSearchAudits.reduce((acc, curr) => acc + (Number(curr.resultsCount) || 0), 0);
+  }, [filteredSearchAudits]);
+
+  const totalEstimatedGrossCost = useMemo(() => {
+    return filteredSearchAudits
+      .reduce((acc, curr) => acc + (Number(curr.estimatedGrossInr) || 0), 0)
+      .toFixed(2);
+  }, [filteredSearchAudits]);
+
+  const mostActiveSearchRep = useMemo(() => {
+    if (filteredSearchAudits.length === 0) return { name: 'None', count: 0 };
+    const counts = {};
+    filteredSearchAudits.forEach((a) => {
+      const name = a.staffName || 'Staff';
+      counts[name] = (counts[name] || 0) + 1;
+    });
+    let topName = 'None';
+    let max = 0;
+    Object.entries(counts).forEach(([name, c]) => {
+      if (c > max) {
+        max = c;
+        topName = name;
+      }
+    });
+    return { name: topName, count: max };
+  }, [filteredSearchAudits]);
+
+  const exportSearchAuditsToCSV = () => {
+    if (filteredSearchAudits.length === 0) {
+      toast.error('No search audit records to export');
+      return;
+    }
+
+    const headers = [
+      'Date',
+      'Time',
+      'Staff Name',
+      'Staff Role',
+      'Search Query',
+      'Category',
+      'Radius (km)',
+      'Limit Requested',
+      'Places Found',
+      'Staff Location Name',
+      'Staff Latitude',
+      'Staff Longitude',
+      'Google Maps URL',
+      'Pages Fetched',
+      'Estimated Gross Cost (INR)',
+      'Net Billed',
+    ];
+
+    const rows = filteredSearchAudits.map((item) => {
+      const dt = formatDateTime(item.createdAt);
+      const lat = item.location?.latitude || '';
+      const lng = item.location?.longitude || '';
+      const mapsLink = lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : '';
+      return [
+        `"${dt.date}"`,
+        `"${dt.time}"`,
+        `"${item.staffName || ''}"`,
+        `"${item.staffRole || ''}"`,
+        `"${(item.query || '').replace(/"/g, '""')}"`,
+        `"${item.category || ''}"`,
+        `"${item.radiusKm != null ? item.radiusKm : 'Default'}"`,
+        `"${item.limitCount != null ? item.limitCount : 'Unlimited'}"`,
+        `"${item.resultsCount || 0}"`,
+        `"${(item.location?.locationName || '').replace(/"/g, '""')}"`,
+        `"${lat}"`,
+        `"${lng}"`,
+        `"${mapsLink}"`,
+        `"${item.pagesCount || 1}"`,
+        `"${item.estimatedGrossInr || 0}"`,
+        `"Rs. 0.00 (Free Tier)"`,
+      ].join(',');
+    });
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `Google_API_Search_Audit_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success('Search Audit Log exported to CSV!');
+  };
+
   const getStatusBadgeVariant = (st) => {
     switch (st) {
       case 'Deal Closed':
@@ -633,6 +793,25 @@ export const FieldReports = () => {
         >
           <ClipboardList size={16} />
           <span>📋 All Field Visits Audit Log</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('api_search_history')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer whitespace-nowrap ${
+            activeTab === 'api_search_history'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+          }`}
+        >
+          <Search size={16} />
+          <span>🔍 Google API Search History</span>
+          {searchAudits.length > 0 && (
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${
+              activeTab === 'api_search_history' ? 'bg-white text-blue-700' : 'bg-blue-100 text-blue-800'
+            }`}>
+              {searchAudits.length}
+            </span>
+          )}
         </button>
       </div>
 
@@ -1506,6 +1685,299 @@ export const FieldReports = () => {
                 )}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {/* ═══ TAB 4: GOOGLE API SEARCH & DISCOVERY HISTORY ═══                  */}
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'api_search_history' && (
+        <div className="space-y-6">
+          {/* Header & Quick Intro */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2.5">
+                <span className="p-2.5 bg-blue-50 text-blue-600 rounded-xl">
+                  <Search size={22} />
+                </span>
+                <div>
+                  <h3 className="text-base font-black text-slate-900 tracking-tight">
+                    Google API Search & Discovery Audit Trail
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Real-time audit log of all map queries executed by staff reps, including live GPS coordinates at search time, radius, limits, and results found.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={exportSearchAuditsToCSV}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition cursor-pointer shadow-xs"
+              >
+                <Download size={14} />
+                <span>Export Audit CSV</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Top 4 Summary KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatCard
+              title="Total API Searches"
+              value={filteredSearchAudits.length}
+              icon={Search}
+              color="blue"
+              subtext={`${searchAuditsTodayCount} executed today`}
+            />
+            <StatCard
+              title="Places Discovered"
+              value={totalPlacesDiscovered}
+              icon={Building2}
+              color="emerald"
+              subtext="Libraries & gyms found on map"
+            />
+            <StatCard
+              title="Estimated API Cost"
+              value={`Rs. ${totalEstimatedGrossCost}`}
+              icon={TrendingUp}
+              color="indigo"
+              subtext="100% Free via $200 Monthly Credit (Rs. 0 Net)"
+            />
+            <StatCard
+              title="Most Active Rep"
+              value={mostActiveSearchRep.name}
+              icon={Award}
+              color="amber"
+              subtext={`${mostActiveSearchRep.count} searches logged`}
+            />
+          </div>
+
+          {/* Filters Bar */}
+          <div className="p-4 bg-white rounded-2xl border border-slate-200/80 shadow-xs space-y-3">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              {/* Left: Date Presets */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-xs font-black text-slate-400 uppercase tracking-wider mr-1">Period:</span>
+                {[
+                  { id: 'all', label: 'All Time' },
+                  { id: 'today', label: 'Today' },
+                  { id: 'yesterday', label: 'Yesterday' },
+                  { id: 'week', label: 'Last 7 Days' },
+                ].map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setApiSearchDateRange(p.id)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                      apiSearchDateRange === p.id
+                        ? 'bg-blue-600 text-white shadow-2xs'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Right: Dropdowns & Keyword Search */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Staff Filter */}
+                <select
+                  value={apiSearchStaff}
+                  onChange={(e) => setApiSearchStaff(e.target.value)}
+                  className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:border-blue-600 cursor-pointer"
+                >
+                  <option value="All">All Staff Reps ({searchAudits.length})</option>
+                  {allStaffAndAdmins.map((s) => {
+                    const count = searchAudits.filter(
+                      (a) => a.staffId === s.id || (a.staffName && a.staffName.toLowerCase() === (s.name || '').toLowerCase())
+                    ).length;
+                    return (
+                      <option key={s.id} value={s.name}>
+                        {s.name} ({count})
+                      </option>
+                    );
+                  })}
+                </select>
+
+                {/* Category Filter */}
+                <select
+                  value={apiSearchCategory}
+                  onChange={(e) => setApiSearchCategory(e.target.value)}
+                  className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:border-blue-600 cursor-pointer"
+                >
+                  <option value="All">All Categories</option>
+                  <option value="Library">Library</option>
+                  <option value="Gym">Gym</option>
+                </select>
+
+                {/* Text search */}
+                <div className="w-56">
+                  <SearchBar
+                    placeholder="Search by query, staff, city..."
+                    value={apiSearchQuery}
+                    onChange={(e) => setApiSearchQuery(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Table Container */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-black uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-4">Search Time & Rep</th>
+                    <th className="py-3 px-4">Query & Category</th>
+                    <th className="py-3 px-4">Search Parameters</th>
+                    <th className="py-3 px-4 text-center">Results Found</th>
+                    <th className="py-3 px-4">Staff Location at Search Time</th>
+                    <th className="py-3 px-4 text-right">API Pages & Cost</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredSearchAudits.length > 0 ? (
+                    filteredSearchAudits.map((item) => {
+                      const dt = formatDateTime(item.createdAt);
+                      const isAdm =
+                        (item.staffRole || '').toLowerCase().includes('admin') ||
+                        (item.staffRole || '').toLowerCase().includes('owner') ||
+                        (item.staffName || '').toLowerCase().includes('admin');
+                      const lat = item.location?.latitude;
+                      const lng = item.location?.longitude;
+                      const mapsUrl = lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : null;
+
+                      return (
+                        <tr key={item.id} className="hover:bg-slate-50/60 transition">
+                          {/* 1. Time & Staff */}
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-2">
+                              <div
+                                className={`w-7 h-7 rounded-lg font-black text-xs flex items-center justify-center shrink-0 ${
+                                  isAdm ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-blue-100 text-blue-800'
+                                }`}
+                              >
+                                {isAdm ? <Crown size={13} className="text-amber-700" /> : (item.staffName || 'S').substring(0, 1).toUpperCase()}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="font-bold text-slate-900 text-xs truncate flex items-center gap-1.5">
+                                  <span>{item.staffName || 'Staff Member'}</span>
+                                  {isAdm && (
+                                    <span className="text-[9px] uppercase font-black bg-amber-100 text-amber-800 px-1 py-0.2 rounded border border-amber-200">
+                                      Admin
+                                    </span>
+                                  )}
+                                </p>
+                                <p className="text-[10px] text-slate-400 mt-0.5">
+                                  📅 {dt.date} • 🕒 {dt.time}
+                                </p>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* 2. Query & Category */}
+                          <td className="py-3 px-4">
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${
+                                  item.category === 'Gym'
+                                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                    : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                                }`}>
+                                  {item.category || 'Library'}
+                                </span>
+                              </div>
+                              <p className="font-bold text-slate-800 text-xs max-w-xs truncate" title={item.query}>
+                                🔍 "{item.query || 'Nearby Search'}"
+                              </p>
+                            </div>
+                          </td>
+
+                          {/* 3. Parameters (Radius & Limit) */}
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-bold">
+                                📏 {item.radiusKm != null ? `${item.radiusKm} km radius` : 'Default 50 km'}
+                              </span>
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-bold">
+                                🎯 {item.limitCount != null ? `Max ${item.limitCount}` : 'Unlimited'}
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* 4. Results Found */}
+                          <td className="py-3 px-4 text-center">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-200 shadow-2xs">
+                              <CheckCircle2 size={12} className="text-emerald-600" />
+                              <span>{item.resultsCount || 0} places</span>
+                            </span>
+                          </td>
+
+                          {/* 5. Location at search time */}
+                          <td className="py-3 px-4">
+                            <div className="space-y-0.5">
+                              <p className="font-bold text-slate-800 text-xs truncate max-w-xs flex items-center gap-1">
+                                <MapPin size={12} className="text-rose-500 shrink-0" />
+                                <span>{item.location?.locationName || 'Live Location'}</span>
+                              </p>
+                              {lat && lng ? (
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] text-slate-400 font-mono">
+                                    {Number(lat).toFixed(4)}, {Number(lng).toFixed(4)}
+                                    {item.location?.accuracy ? ` (±${item.location.accuracy}m)` : ''}
+                                  </span>
+                                  {mapsUrl && (
+                                    <a
+                                      href={mapsUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-0.5 text-[10px] font-bold text-blue-600 hover:text-blue-800 hover:underline"
+                                    >
+                                      <span>View Map</span>
+                                      <ExternalLink size={10} />
+                                    </a>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-[10px] text-slate-400">GPS not recorded</span>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* 6. API Impact & Cost */}
+                          <td className="py-3 px-4 text-right">
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] font-bold text-slate-500 block">
+                                {item.pagesCount || 1} API page{item.pagesCount > 1 ? 's' : ''} (~Rs. {item.estimatedGrossInr || '2.00'})
+                              </span>
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200">
+                                Billed: Rs. 0.00 (Free)
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td colSpan={6} className="py-12">
+                        <EmptyState
+                          icon={Search}
+                          title="No Google API searches match your filters"
+                          description="When staff or admin search for libraries or gyms in Field Marketing, every query is automatically logged here with exact location proof."
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
