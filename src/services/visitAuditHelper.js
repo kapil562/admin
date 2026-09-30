@@ -200,30 +200,66 @@ export const buildStaffDailyTimeline = (staffId, staffName, dateStr, visits = []
     return timeA.localeCompare(timeB);
   });
 
+  // 1. Gather all Punch events from attendance log (supports multiple punches or legacy punchIn/punchOut)
+  const punchEvents = [];
+  const rawPunches = attLog?.punches || [];
+
+  if (rawPunches.length > 0) {
+    rawPunches.forEach((p, idx) => {
+      const isPunchIn = p.type === 'in';
+      punchEvents.push({
+        id: p.id || `punch_${idx}`,
+        type: isPunchIn ? 'punch_in' : 'punch_out',
+        time: p.time || formatDisplayTime(p.isoTime),
+        isoTime: p.isoTime || `${dateStr}T10:00:00Z`,
+        title: isPunchIn
+          ? idx === 0
+            ? 'Duty Started (Punch-In)'
+            : 'Resumed Duty (Punch-In)'
+          : p.note?.toLowerCase().includes('lunch')
+          ? 'Lunch Break (Punch-Out)'
+          : 'Left / On Break (Punch-Out)',
+        subtitle: p.note || (isPunchIn ? 'Staff on field duty' : 'Staff stepped out / break'),
+        location: p.location || null,
+        note: p.note || '',
+      });
+    });
+  } else {
+    // Fallback to legacy punchIn / punchOut
+    if (attLog?.punchIn) {
+      punchEvents.push({
+        id: 'punch_in',
+        type: 'punch_in',
+        time: attLog.punchIn.time,
+        isoTime: attLog.punchIn.isoTime || `${dateStr}T10:00:00Z`,
+        title: 'Duty Started (Punch-In)',
+        subtitle: 'Staff arrived on duty',
+        location: attLog.punchIn.location,
+        note: 'Duty Started',
+      });
+    }
+    if (attLog?.punchOut) {
+      punchEvents.push({
+        id: 'punch_out',
+        type: 'punch_out',
+        time: attLog.punchOut.time,
+        isoTime: attLog.punchOut.isoTime || `${dateStr}T18:00:00Z`,
+        title: 'Duty Ended (Punch-Out)',
+        subtitle: `Total shift hours: ${attLog.totalHours || 'Completed'}`,
+        location: attLog.punchOut.location,
+        note: 'Duty Ended',
+      });
+    }
+  }
+
+  // 2. Prepare Visit Items
   let totalGroundMins = 0;
   let verifiedCount = 0;
   let missingGpsCount = 0;
   let missingPhotoCount = 0;
   let rapidVisitsCount = 0; // < 5 mins
-  const timelineItems = [];
 
-  // 1. Punch In
-  if (attLog?.punchIn) {
-    timelineItems.push({
-      id: 'punch_in',
-      type: 'punch_in',
-      time: attLog.punchIn.time,
-      isoTime: attLog.punchIn.isoTime,
-      title: 'Duty Started (Punch-In)',
-      subtitle: 'Staff arrived on duty',
-      location: attLog.punchIn.location,
-    });
-  }
-
-  // 2. Visits & Gaps
-  let lastCheckoutMinutes = attLog?.punchIn?.time ? parseTimeToMinutes(attLog.punchIn.time) : null;
-
-  sortedVisits.forEach((visit, idx) => {
+  const visitItems = sortedVisits.map((visit, idx) => {
     const duration = getVisitDurationMinutes(visit);
     totalGroundMins += duration;
 
@@ -233,85 +269,112 @@ export const buildStaffDailyTimeline = (staffId, staffName, dateStr, visits = []
     if (!auth.hasPhoto) missingPhotoCount++;
     if (duration < 5) rapidVisitsCount++;
 
-    const checkInMins = parseTimeToMinutes(visit.checkInTime) || parseTimeToMinutes(visit.createdAt);
-    const checkOutMins = parseTimeToMinutes(visit.checkOutTime) || (checkInMins ? checkInMins + duration : null);
-
-    // If there was a significant transit / idle gap between visits
-    if (lastCheckoutMinutes != null && checkInMins != null && checkInMins > lastCheckoutMinutes + 20) {
-      const gapMins = checkInMins - lastCheckoutMinutes;
-      timelineItems.push({
-        id: `gap_${idx}`,
-        type: 'gap',
-        durationMins: gapMins,
-        isLongGap: gapMins >= 60,
-        title: gapMins >= 60 ? `⚠️ Long Idle Gap (${formatDurationMinutes(gapMins)})` : `🚗 Transit / Travel (${formatDurationMinutes(gapMins)})`,
-      });
-    }
-
     const startTime = formatDisplayTime(visit.checkInTime, visit.createdAt);
     const calculatedOut = calculateCheckoutTime(visit.checkInTime || startTime, duration);
     const endTime = formatDisplayTime(visit.checkOutTime, calculatedOut);
     const entryReceived = formatEntryTimestamp(visit.createdAt);
     const syncStatus = evaluateSyncDelay(visit.checkInTime || startTime, visit.createdAt);
 
-    timelineItems.push({
+    return {
       id: visit.id || `visit_${idx}`,
       type: 'visit',
       visit,
+      isoTime: visit.createdAt || `${dateStr}T12:00:00Z`,
+      time: startTime,
       durationMins: duration,
       auth,
       startTime,
       endTime,
       checkInTime: visit.checkInTime || startTime,
       checkOutTime: visit.checkOutTime || endTime,
+      location: visit.location || null,
       entryReceived,
       syncStatus,
-    });
-
-    if (checkOutMins != null) {
-      lastCheckoutMinutes = checkOutMins;
-    }
+    };
   });
 
-  // 3. Punch Out
-  if (attLog?.punchOut) {
+  // 3. Merge Punches + Visits into one unified chronological timeline
+  const allChronologicalEvents = [...punchEvents, ...visitItems].sort((a, b) => {
+    const timeA = a.isoTime || a.time || '';
+    const timeB = b.isoTime || b.time || '';
+    return timeA.localeCompare(timeB);
+  });
+
+  // 4. Calculate Road Distances (KM) between consecutive GPS stops
+  let totalDistanceKm = 0;
+  let lastGpsPoint = null;
+  const validGpsCoordinates = [];
+  const timelineItems = [];
+
+  allChronologicalEvents.forEach((item, idx) => {
+    const hasGps = Boolean(item.location && item.location.latitude && item.location.longitude);
+
+    let legDistanceKm = 0;
+    if (hasGps) {
+      const curLat = Number(item.location.latitude);
+      const curLng = Number(item.location.longitude);
+
+      if (lastGpsPoint) {
+        const straightMeters = calculateDistance(lastGpsPoint.lat, lastGpsPoint.lng, curLat, curLng);
+        // Real-world road winding multiplier (standard factor ~1.25x for city travel)
+        legDistanceKm = Number(((straightMeters * 1.25) / 1000).toFixed(1));
+        // Filter out GPS jitter in the exact same room (< 100m)
+        if (straightMeters < 100) legDistanceKm = 0;
+        totalDistanceKm += legDistanceKm;
+      }
+
+      lastGpsPoint = { lat: curLat, lng: curLng };
+      validGpsCoordinates.push(`${curLat},${curLng}`);
+    }
+
     timelineItems.push({
-      id: 'punch_out',
-      type: 'punch_out',
-      time: attLog.punchOut.time,
-      isoTime: attLog.punchOut.isoTime,
-      title: 'Duty Ended (Punch-Out)',
-      subtitle: `Total shift hours: ${attLog.totalHours || 'Completed'}`,
-      location: attLog.punchOut.location,
+      ...item,
+      legDistanceKm,
+      cumulativeDistanceKm: Number(totalDistanceKm.toFixed(1)),
+      hasGps,
     });
-  }
+  });
+
+  // 5. Generate Google Maps Route URL for all day stops
+  const googleMapsRouteUrl =
+    validGpsCoordinates.length >= 2
+      ? `https://www.google.com/maps/dir/${validGpsCoordinates.join('/')}`
+      : validGpsCoordinates.length === 1
+      ? `https://www.google.com/maps?q=${validGpsCoordinates[0]}`
+      : null;
 
   const totalVisits = sortedVisits.length;
-  const trustScore = totalVisits > 0 ? Math.round((verifiedCount / totalVisits) * 100) : 0;
+  const trustScore = totalVisits > 0 ? Math.round((verifiedCount / totalVisits) * 100) : 100;
 
-  // Live status
+  // 6. Current Live Duty Status
   let liveStatus = 'Inactive';
   const isToday = dateStr === new Date().toISOString().split('T')[0];
+
+  const latestPunch = punchEvents.length > 0 ? punchEvents[punchEvents.length - 1] : null;
+  const isCurrentlyOnDuty = latestPunch?.type === 'punch_in';
+
   if (isToday) {
-    if (attLog?.punchOut) {
-      liveStatus = 'Shift Ended';
-    } else if (attLog?.punchIn) {
-      if (sortedVisits.length > 0) {
-        const last = sortedVisits[sortedVisits.length - 1];
-        const lastCreatedMs = new Date(last.createdAt).getTime();
-        const diffMins = Math.round((Date.now() - lastCreatedMs) / (60 * 1000));
-        if (diffMins < 45) {
-          liveStatus = `🟢 Actively on Field (Visited ${diffMins}m ago)`;
-        } else if (diffMins < 120) {
-          liveStatus = `⚡ In Transit / Between Meetings (${diffMins}m ago)`;
+    if (latestPunch) {
+      if (latestPunch.type === 'punch_in') {
+        if (sortedVisits.length > 0) {
+          const last = sortedVisits[sortedVisits.length - 1];
+          const lastCreatedMs = new Date(last.createdAt).getTime();
+          const diffMins = Math.round((Date.now() - lastCreatedMs) / (60 * 1000));
+          if (diffMins < 45) {
+            liveStatus = `🟢 On Duty (Visited ${diffMins}m ago)`;
+          } else {
+            liveStatus = `🟢 On Duty (Active on Field)`;
+          }
         } else {
-          liveStatus = `⚠️ Inactive on Field (${Math.floor(diffMins / 60)}h without update)`;
+          liveStatus = '🟢 Punched-in, Ready on Field';
         }
       } else {
-        liveStatus = '🟢 Punched-in, No visits yet';
+        liveStatus = latestPunch.note?.toLowerCase().includes('lunch')
+          ? '🥪 Out on Lunch Break'
+          : '⚪ Off Duty / Out on Break';
       }
     } else {
-      liveStatus = sortedVisits.length > 0 ? '🟢 Active (Visits without Punch-In)' : '❌ Not Started';
+      liveStatus = sortedVisits.length > 0 ? '🟢 Active (Visits without Punch-In)' : '❌ Not Started Today';
     }
   }
 
@@ -320,19 +383,34 @@ export const buildStaffDailyTimeline = (staffId, staffName, dateStr, visits = []
     staffId,
     staffName,
     attLog,
+    punches: punchEvents,
     visits: sortedVisits,
     totalVisits,
     totalGroundMins,
     totalGroundFormatted: formatDurationMinutes(totalGroundMins),
-    shiftHours: attLog?.totalHours || (attLog?.punchIn ? 'In Progress' : 'No Shift Record'),
+    totalDistanceKm: Number(totalDistanceKm.toFixed(1)),
+    totalActiveMinutes: attLog?.totalActiveMinutes || 0,
+    totalBreakMinutes: attLog?.totalBreakMinutes || 0,
+    shiftHours: attLog?.totalHours || (isCurrentlyOnDuty ? 'Active on Duty' : 'No Shift Record'),
     trustScore,
     verifiedCount,
     missingGpsCount,
     missingPhotoCount,
     rapidVisitsCount,
     timelineItems,
+    googleMapsRouteUrl,
     liveStatus,
+    isCurrentlyOnDuty,
+    latestPunch,
   };
+};
+
+/**
+ * Quick helper to calculate total KM traveled by a staff member on a specific date
+ */
+export const calculateStaffDailyDistanceKm = (staffId, staffName, dateStr, visits = [], logs = []) => {
+  const timeline = buildStaffDailyTimeline(staffId, staffName, dateStr, visits, logs);
+  return timeline.totalDistanceKm || 0;
 };
 
 function parseTimeToMinutes(str) {

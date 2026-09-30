@@ -4,6 +4,7 @@ import {
   getAttendanceLogs,
   getCurrentGPSLocation,
   getFieldVisits,
+  punchAttendance,
 } from '../firebase/services/marketingService';
 import { getStaffUsers } from '../firebase/services/staffService';
 import { useAuth } from '../context/AuthContext';
@@ -36,6 +37,11 @@ import {
   Crown,
   Eye,
   Check,
+  Compass,
+  Utensils,
+  Coffee,
+  Route,
+  Navigation,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -43,6 +49,7 @@ import {
   evaluateVisitAuthenticity,
   formatDurationMinutes,
   getVisitDurationMinutes,
+  calculateStaffDailyDistanceKm,
 } from '../services/visitAuditHelper';
 
 export const StaffAttendance = () => {
@@ -83,6 +90,60 @@ export const StaffAttendance = () => {
   );
 
   const totalPresentToday = logs.filter((l) => l.date === todayStr).length;
+
+  const [punchingAction, setPunchingAction] = useState(false);
+
+  const punchMutation = useMutation({
+    mutationFn: punchAttendance,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['admin_attendance_logs'] });
+      queryClient.invalidateQueries({ queryKey: ['admin_field_visits'] });
+      const punchType = data.lastPunchType || 'in';
+      if (punchType === 'in') {
+        toast.success('🟢 Punched In Successfully! (Duty Active)', { icon: '🟢' });
+      } else {
+        toast.success(`Punched Out Recorded (${data.punches?.[data.punches.length - 1]?.note || 'Break/Out'})`, { icon: '🥪' });
+      }
+    },
+    onError: (err) => {
+      toast.error(err.message || 'Failed to record punch');
+    },
+    onSettled: () => {
+      setPunchingAction(false);
+    },
+  });
+
+  const handlePunch = async (type, note = '') => {
+    setPunchingAction(true);
+    let location = null;
+    try {
+      toast.loading('Acquiring phone GPS...', { id: 'att-gps' });
+      location = await getCurrentGPSLocation();
+      toast.success(`GPS Locked (±${location.accuracy}m)`, { id: 'att-gps' });
+    } catch {
+      toast.dismiss('att-gps');
+      toast.error('Could not get GPS. Punching with default time.');
+    }
+
+    punchMutation.mutate({
+      staffId: myId,
+      staffName: user?.displayName || user?.name || 'Staff Member',
+      type,
+      location,
+      note,
+    });
+  };
+
+  const punches = myTodayLog?.punches || [];
+  const lastPunch = punches.length > 0 ? punches[punches.length - 1] : null;
+  const isCurrentlyOnDuty = punches.length > 0
+    ? lastPunch.type === 'in'
+    : Boolean(myTodayLog?.punchIn && !myTodayLog?.punchOut);
+  const isOnBreak = lastPunch?.type === 'out' && (
+    (lastPunch.note || '').toLowerCase().includes('lunch') ||
+    (lastPunch.note || '').toLowerCase().includes('break') ||
+    (lastPunch.note || '').toLowerCase().includes('khana')
+  );
 
   // ── Unified Staff & Admin List ─────────────────────────────────────────────
   const allStaffAndAdmins = useMemo(() => {
@@ -196,6 +257,7 @@ export const StaffAttendance = () => {
     const totalMissingGpsOnDate = staffTimelines.reduce((sum, t) => sum + t.missingGpsCount, 0);
     const totalMissingPhotoOnDate = staffTimelines.reduce((sum, t) => sum + t.missingPhotoCount, 0);
     const totalRapidOnDate = staffTimelines.reduce((sum, t) => sum + t.rapidVisitsCount, 0);
+    const totalDistanceKmOnDate = staffTimelines.reduce((sum, t) => sum + (t.totalDistanceKm || 0), 0);
 
     const overallTrustScore = totalVisitsOnDate > 0
       ? Math.round((totalVerifiedOnDate / totalVisitsOnDate) * 100)
@@ -206,6 +268,7 @@ export const StaffAttendance = () => {
       totalVisits: totalVisitsOnDate,
       totalGroundMins: totalGroundMinsOnDate,
       totalGroundFormatted: formatDurationMinutes(totalGroundMinsOnDate),
+      totalDistanceKm: Number(totalDistanceKmOnDate.toFixed(1)),
       overallTrustScore,
       missingGpsCount: totalMissingGpsOnDate,
       missingPhotoCount: totalMissingPhotoOnDate,
@@ -237,6 +300,110 @@ export const StaffAttendance = () => {
         }
       />
 
+
+      {/* ═══ QUICK MULTI-PUNCH ATTENDANCE ACTION BAR ═══ */}
+      <div className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div
+            className={`w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-2xs ${
+              isCurrentlyOnDuty
+                ? 'bg-gradient-to-tr from-emerald-600 to-teal-500'
+                : isOnBreak
+                ? 'bg-gradient-to-tr from-amber-500 to-orange-500'
+                : 'bg-slate-800'
+            }`}
+          >
+            {isCurrentlyOnDuty ? (
+              <CheckCircle2 size={20} />
+            ) : isOnBreak ? (
+              <Utensils size={18} />
+            ) : (
+              <Clock size={20} />
+            )}
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-500">My Status Today:</span>
+              <span
+                className={`text-xs font-black px-2 py-0.5 rounded-full ${
+                  isCurrentlyOnDuty
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : isOnBreak
+                    ? 'bg-amber-100 text-amber-900 animate-pulse'
+                    : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                {isCurrentlyOnDuty
+                  ? '🟢 Active On Duty'
+                  : isOnBreak
+                  ? '🥪 On Lunch / Break'
+                  : punches.length > 0
+                  ? '⚪ Shift Concluded'
+                  : '❌ Not Punched Today'}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              {lastPunch
+                ? `Last punch: ${lastPunch.time} (${lastPunch.note || lastPunch.type}) • ${punches.length} sessions recorded`
+                : 'Punch in to record arrival and GPS location for your daily timesheet.'}
+            </p>
+          </div>
+        </div>
+
+        {/* Quick Punch Buttons */}
+        <div className="flex items-center gap-2 flex-wrap w-full md:w-auto">
+          {!isCurrentlyOnDuty ? (
+            <button
+              type="button"
+              disabled={punchingAction}
+              onClick={() =>
+                handlePunch('in', isOnBreak ? 'Resumed Duty (Wapis In)' : 'Duty Started')
+              }
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <LogIn size={15} />
+              <span>
+                {isOnBreak
+                  ? '🟢 Wapis In (Resume Duty)'
+                  : punches.length > 0
+                  ? '🟢 Punch In Again'
+                  : '🟢 Punch In (Duty Start)'}
+              </span>
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={punchingAction}
+                onClick={() => handlePunch('out', 'Lunch Break (Khana)')}
+                className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold shadow-2xs transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                title="Out for lunch / food break"
+              >
+                <Utensils size={14} />
+                <span>🥪 Lunch Break</span>
+              </button>
+              <button
+                type="button"
+                disabled={punchingAction}
+                onClick={() => handlePunch('out', 'Tea / Short Break')}
+                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+              >
+                <Coffee size={14} />
+                <span>☕ Break</span>
+              </button>
+              <button
+                type="button"
+                disabled={punchingAction}
+                onClick={() => handlePunch('out', 'Duty Concluded / Day End')}
+                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold shadow-2xs transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+              >
+                <LogOut size={14} />
+                <span>🏠 Duty End</span>
+              </button>
+            </>
+          )}
+        </div>
+      </div>
 
       {/* ═══ VIEW TABS: Boss Eye vs Timesheet Logs ═══ */}
       <div className="flex items-center gap-2 border-b border-slate-200 pb-3">
@@ -337,13 +504,20 @@ export const StaffAttendance = () => {
           </div>
 
           {/* Boss Top Metric Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
             <StatCard
               title="Boss Authenticity Score"
               value={`${bossTrackerData.overallTrustScore}%`}
               subtitle={`${bossTrackerData.totalVisits} visits checked on ${trackerDate}`}
               icon={ShieldCheck}
               color={bossTrackerData.overallTrustScore >= 80 ? 'emerald' : bossTrackerData.overallTrustScore >= 50 ? 'amber' : 'rose'}
+            />
+            <StatCard
+              title="Team Travel Distance"
+              value={`${bossTrackerData.totalDistanceKm} KM`}
+              subtitle={`Total road movement on ${trackerDate}`}
+              icon={Compass}
+              color="indigo"
             />
             <StatCard
               title="Ground Time with Clients"
@@ -419,7 +593,13 @@ export const StaffAttendance = () => {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
+                    <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+                      <div className="px-3 py-1.5 bg-white border border-slate-200 rounded-xl shadow-2xs text-center">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase block">Field Travel</span>
+                        <span className="text-xs font-black text-indigo-700">
+                          🏍️ {timeline.totalDistanceKm} KM
+                        </span>
+                      </div>
                       <div className="px-3 py-1.5 bg-white border border-slate-200 rounded-xl shadow-2xs text-center">
                         <span className="text-[10px] text-slate-400 font-bold uppercase block">Shift Hours</span>
                         <span className="text-xs font-black text-slate-800">
@@ -452,6 +632,19 @@ export const StaffAttendance = () => {
                           {timeline.trustScore}%
                         </span>
                       </div>
+                      {timeline.googleMapsRouteUrl && (
+                        <a
+                          href={timeline.googleMapsRouteUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-black transition flex items-center gap-1.5 shadow-xs shrink-0 cursor-pointer"
+                          title="Open complete stop-by-stop GPS route on Google Maps"
+                        >
+                          <Compass size={14} />
+                          <span>🗺️ Route Map</span>
+                          <ExternalLink size={11} />
+                        </a>
+                      )}
                     </div>
                   </div>
 
@@ -461,6 +654,7 @@ export const StaffAttendance = () => {
                       <div className="relative pl-6 sm:pl-8 space-y-6 before:content-[''] before:absolute before:left-3 sm:before:left-4 before:top-3 before:bottom-3 before:w-0.5 before:bg-slate-200">
                         {timeline.timelineItems.map((item) => {
                           if (item.type === 'punch_in') {
+                            const isResume = (item.note || '').toLowerCase().includes('resume') || (item.note || '').toLowerCase().includes('wapis');
                             return (
                               <div key={item.id} className="relative group">
                                 <div className="absolute -left-6 sm:-left-8 top-1 w-6 h-6 rounded-full bg-emerald-600 text-white flex items-center justify-center ring-4 ring-white shadow-xs">
@@ -468,11 +662,18 @@ export const StaffAttendance = () => {
                                 </div>
                                 <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                                   <div>
-                                    <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 block">
-                                      Duty Shift Started
-                                    </span>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 block">
+                                        {isResume ? 'Duty Resumed (Wapis In)' : 'Duty Shift Started'}
+                                      </span>
+                                      {item.legDistanceKm > 0 && (
+                                        <span className="text-[10px] font-black px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 border border-indigo-200">
+                                          🏍️ +{item.legDistanceKm} KM traveled
+                                        </span>
+                                      )}
+                                    </div>
                                     <h5 className="font-bold text-slate-900 text-xs sm:text-sm">
-                                      Punch-In at {item.time}
+                                      Punch-In at {item.time} {item.note ? `• ${item.note}` : ''}
                                     </h5>
                                   </div>
                                   {item.location && (
@@ -542,6 +743,12 @@ export const StaffAttendance = () => {
                                       <span className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
                                         ⏱️ {formatDurationMinutes(item.durationMins)} on site
                                       </span>
+
+                                      {item.legDistanceKm > 0 && (
+                                        <span className="px-2.5 py-1 rounded-xl text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                          🏍️ +{item.legDistanceKm} KM to here
+                                        </span>
+                                      )}
 
                                       {/* If staff typed a manual visit time that differs from actual entry time */}
                                       {(() => {
@@ -668,18 +875,48 @@ export const StaffAttendance = () => {
                           }
 
                           if (item.type === 'punch_out') {
+                            const isLunch = (item.note || '').toLowerCase().includes('lunch') || (item.note || '').toLowerCase().includes('khana');
+                            const isBreak = isLunch || (item.note || '').toLowerCase().includes('break') || (item.note || '').toLowerCase().includes('tea');
+
                             return (
                               <div key={item.id} className="relative group">
-                                <div className="absolute -left-6 sm:-left-8 top-1 w-6 h-6 rounded-full bg-slate-800 text-white flex items-center justify-center ring-4 ring-white shadow-xs">
-                                  <LogOut size={12} />
+                                <div
+                                  className={`absolute -left-6 sm:-left-8 top-1 w-6 h-6 rounded-full text-white flex items-center justify-center ring-4 ring-white shadow-xs ${
+                                    isLunch ? 'bg-amber-500' : isBreak ? 'bg-amber-600' : 'bg-slate-800'
+                                  }`}
+                                >
+                                  {isLunch ? <Utensils size={12} /> : isBreak ? <Coffee size={12} /> : <LogOut size={12} />}
                                 </div>
-                                <div className="bg-slate-100 border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                <div
+                                  className={`border rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+                                    isLunch
+                                      ? 'bg-amber-50/60 border-amber-200/80'
+                                      : isBreak
+                                      ? 'bg-amber-50/40 border-amber-200/70'
+                                      : 'bg-slate-100 border-slate-200'
+                                  }`}
+                                >
                                   <div>
-                                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-600 block">
-                                      Duty Shift Concluded
-                                    </span>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span
+                                        className={`text-[10px] font-black uppercase tracking-wider block ${
+                                          isLunch ? 'text-amber-800' : isBreak ? 'text-amber-800' : 'text-slate-600'
+                                        }`}
+                                      >
+                                        {isLunch
+                                          ? '🥪 Lunch Break (Khana Out)'
+                                          : isBreak
+                                          ? '☕ Break / Stepped Out'
+                                          : 'Duty Shift Concluded'}
+                                      </span>
+                                      {item.legDistanceKm > 0 && (
+                                        <span className="text-[10px] font-black px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 border border-indigo-200">
+                                          🏍️ +{item.legDistanceKm} KM to here
+                                        </span>
+                                      )}
+                                    </div>
                                     <h5 className="font-bold text-slate-800 text-xs sm:text-sm">
-                                      Punch-Out at {item.time} • Total Duty: {item.totalHours || 'Recorded'}
+                                      Punch-Out at {item.time} • {item.note || (item.totalHours ? `Total Shift: ${item.totalHours}` : 'Logged')}
                                     </h5>
                                   </div>
                                   {item.location && (
@@ -762,77 +999,122 @@ export const StaffAttendance = () => {
                 <tr className="bg-slate-50/80 border-b border-slate-100 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
                   <th className="px-5 py-3.5">Staff Name</th>
                   <th className="px-5 py-3.5">Date</th>
-                  <th className="px-5 py-3.5">Punch-In (Start)</th>
-                  <th className="px-5 py-3.5">Punch-Out (End)</th>
-                  <th className="px-5 py-3.5">Total Duration</th>
+                  <th className="px-5 py-3.5">First Punch-In</th>
+                  <th className="px-5 py-3.5">Last Punch-Out</th>
+                  <th className="px-4 py-3.5 text-center">Punches Log</th>
+                  <th className="px-4 py-3.5 text-center">Duty Duration</th>
+                  <th className="px-4 py-3.5 text-center">Break Duration</th>
+                  <th className="px-4 py-3.5 text-center">Distance (KM)</th>
                   <th className="px-5 py-3.5 text-right">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
                 {visibleLogs.length > 0 ? (
-                  visibleLogs.map((log) => (
-                    <tr key={log.id} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 font-bold text-xs flex items-center justify-center">
-                            {log.staffName?.substring(0, 2).toUpperCase() || 'ST'}
+                  visibleLogs.map((log) => {
+                    const rowKm = calculateStaffDailyDistanceKm(
+                      log.staffId,
+                      log.staffName,
+                      log.date,
+                      visits,
+                      logs
+                    );
+                    const logPunches = log.punches || [];
+                    const firstIn = log.punchIn?.time || logPunches.find(p => p.type === 'in')?.time || '-';
+                    const lastOut = log.punchOut?.time || (logPunches.length > 0 && logPunches[logPunches.length - 1].type === 'out' ? logPunches[logPunches.length - 1].time : '-');
+                    const isDone = Boolean(log.punchOut || (logPunches.length > 0 && logPunches[logPunches.length - 1].type === 'out' && !logPunches[logPunches.length - 1].note?.toLowerCase().includes('lunch') && !logPunches[logPunches.length - 1].note?.toLowerCase().includes('break')));
+                    const isLunch = Boolean(logPunches.length > 0 && logPunches[logPunches.length - 1].type === 'out' && (logPunches[logPunches.length - 1].note?.toLowerCase().includes('lunch') || logPunches[logPunches.length - 1].note?.toLowerCase().includes('khana')));
+
+                    return (
+                      <tr key={log.id} className="hover:bg-slate-50/70 transition-colors">
+                        <td className="px-5 py-4">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 font-bold text-xs flex items-center justify-center">
+                              {log.staffName?.substring(0, 2).toUpperCase() || 'ST'}
+                            </div>
+                            <span className="font-bold text-slate-900">{log.staffName}</span>
                           </div>
-                          <span className="font-bold text-slate-900">{log.staffName}</span>
-                        </div>
-                      </td>
+                        </td>
 
-                      <td className="px-5 py-4 text-xs text-slate-600 whitespace-nowrap">
-                        {log.date}
-                      </td>
+                        <td className="px-5 py-4 text-xs text-slate-600 whitespace-nowrap">
+                          {log.date}
+                        </td>
 
-                      {/* Punch In */}
-                      <td className="px-5 py-4 text-xs whitespace-nowrap">
-                        <div className="font-bold text-slate-800">{log.punchIn?.time || '-'}</div>
-                        {log.punchIn?.location && (
-                          <a
-                            href={log.punchIn.location.mapsUrl || `https://www.google.com/maps?q=${log.punchIn.location.latitude},${log.punchIn.location.longitude}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-[10px] text-blue-600 font-semibold hover:underline mt-0.5"
+                        {/* Punch In */}
+                        <td className="px-5 py-4 text-xs whitespace-nowrap">
+                          <div className="font-bold text-slate-800">{firstIn}</div>
+                          {log.punchIn?.location && (
+                            <a
+                              href={log.punchIn.location.mapsUrl || `https://www.google.com/maps?q=${log.punchIn.location.latitude},${log.punchIn.location.longitude}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-[10px] text-blue-600 font-semibold hover:underline mt-0.5"
+                            >
+                              <MapPin size={10} />
+                              <span>View GPS Location</span>
+                            </a>
+                          )}
+                        </td>
+
+                        {/* Punch Out */}
+                        <td className="px-5 py-4 text-xs whitespace-nowrap">
+                          <div className="font-bold text-slate-800">{lastOut}</div>
+                          {log.punchOut?.location && (
+                            <a
+                              href={log.punchOut.location.mapsUrl || `https://www.google.com/maps?q=${log.punchOut.location.latitude},${log.punchOut.location.longitude}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-[10px] text-blue-600 font-semibold hover:underline mt-0.5"
+                            >
+                              <MapPin size={10} />
+                              <span>View GPS Location</span>
+                            </a>
+                          )}
+                        </td>
+
+                        {/* Punches Log */}
+                        <td className="px-4 py-4 text-center whitespace-nowrap">
+                          <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                            {logPunches.length > 0 ? `${logPunches.length} Punches` : '1 Shift Log'}
+                          </span>
+                        </td>
+
+                        {/* Active Duty Duration */}
+                        <td className="px-4 py-4 text-center font-extrabold text-slate-800 text-xs whitespace-nowrap">
+                          {formatDurationMinutes(log.totalActiveMinutes) || log.totalHours || '-'}
+                        </td>
+
+                        {/* Break Duration */}
+                        <td className="px-4 py-4 text-center font-bold text-amber-700 text-xs whitespace-nowrap">
+                          {formatDurationMinutes(log.totalBreakMinutes) || '0m'}
+                        </td>
+
+                        {/* Distance (KM) */}
+                        <td className="px-4 py-4 text-center whitespace-nowrap">
+                          <span className={`px-2.5 py-1 rounded-full font-black text-xs inline-flex items-center gap-1 ${
+                            rowKm > 0
+                              ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                              : 'bg-slate-100 text-slate-400'
+                          }`}>
+                            <span>🏍️</span>
+                            <span>{rowKm} KM</span>
+                          </span>
+                        </td>
+
+                        {/* Status */}
+                        <td className="px-5 py-4 text-right whitespace-nowrap">
+                          <Badge
+                            variant={isDone ? 'success' : isLunch ? 'warning' : 'info'}
+                            dot
                           >
-                            <MapPin size={10} />
-                            <span>View GPS Location</span>
-                          </a>
-                        )}
-                      </td>
-
-                      {/* Punch Out */}
-                      <td className="px-5 py-4 text-xs whitespace-nowrap">
-                        <div className="font-bold text-slate-800">{log.punchOut?.time || '-'}</div>
-                        {log.punchOut?.location && (
-                          <a
-                            href={log.punchOut.location.mapsUrl || `https://www.google.com/maps?q=${log.punchOut.location.latitude},${log.punchOut.location.longitude}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-[10px] text-blue-600 font-semibold hover:underline mt-0.5"
-                          >
-                            <MapPin size={10} />
-                            <span>View GPS Location</span>
-                          </a>
-                        )}
-                      </td>
-
-                      {/* Total Duration */}
-                      <td className="px-5 py-4 font-extrabold text-slate-800 text-xs whitespace-nowrap">
-                        {log.totalHours || '-'}
-                      </td>
-
-                      {/* Status */}
-                      <td className="px-5 py-4 text-right whitespace-nowrap">
-                        <Badge variant={log.punchOut ? 'success' : 'warning'} dot>
-                          {log.punchOut ? 'Shift Done' : 'On Duty'}
-                        </Badge>
-                      </td>
-                    </tr>
-                  ))
+                            {isDone ? 'Shift Done' : isLunch ? 'On Lunch' : 'On Duty'}
+                          </Badge>
+                        </td>
+                      </tr>
+                    );
+                  })
                 ) : (
                   <tr>
-                    <td colSpan={6} className="p-8">
+                    <td colSpan={9} className="p-8">
                       <EmptyState
                         icon={CalendarCheck}
                         title="No attendance records found"

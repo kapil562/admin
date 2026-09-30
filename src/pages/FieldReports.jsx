@@ -18,6 +18,7 @@ import {
   formatDisplayTime,
   formatEntryTimestamp,
   evaluateSyncDelay,
+  calculateStaffDailyDistanceKm,
 } from '../services/visitAuditHelper';
 import {
   ClipboardList,
@@ -440,15 +441,26 @@ export const FieldReports = () => {
       }
     });
 
-    return Array.from(staffMap.values()).sort((a, b) => {
-      if (b.totalVisits !== a.totalVisits) {
-        return b.totalVisits - a.totalVisits;
-      }
-      if (a.isAdmin && !b.isAdmin) return -1;
-      if (!a.isAdmin && b.isAdmin) return 1;
-      return a.name.localeCompare(b.name);
-    });
-  }, [allStaffAndAdmins, visits]);
+    return Array.from(staffMap.values())
+      .map((entry) => ({
+        ...entry,
+        todayDistanceKm: calculateStaffDailyDistanceKm(
+          entry.id,
+          entry.name,
+          todayStr,
+          visits,
+          attendanceLogs
+        ),
+      }))
+      .sort((a, b) => {
+        if (b.totalVisits !== a.totalVisits) {
+          return b.totalVisits - a.totalVisits;
+        }
+        if (a.isAdmin && !b.isAdmin) return -1;
+        if (!a.isAdmin && b.isAdmin) return 1;
+        return a.name.localeCompare(b.name);
+      });
+  }, [allStaffAndAdmins, visits, attendanceLogs]);
 
   // ── Pipeline & Competitor Analytics ───────────────────────────────────────
   const pipelineStats = useMemo(() => {
@@ -1041,6 +1053,7 @@ export const FieldReports = () => {
                     <th className="px-5 py-3.5">Staff Rep</th>
                     <th className="px-4 py-3.5 text-center">Today's Visits & Target</th>
                     <th className="px-4 py-3.5 text-center">Today's Deals</th>
+                    <th className="px-4 py-3.5 text-center">Today's Distance</th>
                     <th className="px-4 py-3.5 text-center">Total Visits</th>
                     <th className="px-4 py-3.5 text-center">This Week</th>
                     <th className="px-4 py-3.5 text-center">Demos</th>
@@ -1120,6 +1133,18 @@ export const FieldReports = () => {
                                 </span>
                               )}
                             </div>
+                          </td>
+
+                          {/* Today's Distance (KM) */}
+                          <td className="px-4 py-3.5 text-center">
+                            <span className={`px-2.5 py-1 rounded-full font-black text-xs inline-flex items-center gap-1 ${
+                              s.todayDistanceKm > 0
+                                ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                : 'bg-slate-100 text-slate-400'
+                            }`}>
+                              <span>🏍️</span>
+                              <span>{s.todayDistanceKm} KM</span>
+                            </span>
                           </td>
 
                           {/* Total Visits */}

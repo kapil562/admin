@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
-import { getFieldVisits, logFieldVisit, updateFieldVisit, getCurrentGPSLocation, getAttendanceLogs, updateVisitStatus } from '../firebase/services/marketingService';
+import { getFieldVisits, logFieldVisit, updateFieldVisit, getCurrentGPSLocation, getAttendanceLogs, updateVisitStatus, punchAttendance } from '../firebase/services/marketingService';
 import { calculateStaffPayroll, getStaffUsers } from '../firebase/services/staffService';
 import { getSoftwareVerticals } from '../firebase/services/verticalService';
 import { searchNearbyLibraries, formatDistance, getNavigationUrl } from '../services/googleMapsService';
@@ -43,6 +43,9 @@ import {
   Bell,
   RotateCcw,
   Target,
+  Utensils,
+  Coffee,
+  Route,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -53,6 +56,7 @@ import {
   formatDisplayTime,
   formatEntryTimestamp,
   evaluateSyncDelay,
+  calculateStaffDailyDistanceKm,
 } from '../services/visitAuditHelper';
 
 const VISIT_STATUSES = ['Interested', 'Demo Given', 'Follow Up', 'Deal Closed', 'Not Interested'];
@@ -228,6 +232,51 @@ export const StaffDashboard = () => {
       toast.success('Status updated successfully');
     },
   });
+
+  const [punchingAction, setPunchingAction] = useState(false);
+  const [showPunchHistory, setShowPunchHistory] = useState(false);
+
+  // 8. Attendance Multi-Punch Mutation (Duty In, Lunch Break, Tea Break, Duty End)
+  const punchMutation = useMutation({
+    mutationFn: punchAttendance,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['admin_attendance_logs'] });
+      queryClient.invalidateQueries({ queryKey: ['admin_field_visits'] });
+      const punchType = data.lastPunchType || 'in';
+      if (punchType === 'in') {
+        toast.success('🟢 Punched In Successfully! (Duty Active)', { icon: '🟢' });
+      } else {
+        toast.success(`Punched Out Recorded (${data.punches?.[data.punches.length - 1]?.note || 'Break/Out'})`, { icon: '🥪' });
+      }
+    },
+    onError: (err) => {
+      toast.error(err.message || 'Failed to record punch attendance');
+    },
+    onSettled: () => {
+      setPunchingAction(false);
+    },
+  });
+
+  const handlePunch = async (type, note = '') => {
+    setPunchingAction(true);
+    let location = null;
+    try {
+      toast.loading('Acquiring phone GPS for punch...', { id: 'gps-punch' });
+      location = await getCurrentGPSLocation();
+      toast.success(`GPS Locked (±${location.accuracy}m)`, { id: 'gps-punch' });
+    } catch (e) {
+      toast.dismiss('gps-punch');
+      toast.error('Could not get GPS location. Recording punch without device GPS.');
+    }
+
+    punchMutation.mutate({
+      staffId: myId,
+      staffName: user?.displayName || user?.name || 'Staff Member',
+      type,
+      location,
+      note,
+    });
+  };
 
   const resetVisitForm = (prefill = null) => {
     const now = new Date();
@@ -470,6 +519,42 @@ export const StaffDashboard = () => {
     (l) => (l.staffId === myId || (l.staffName && l.staffName.toLowerCase() === myName)) && l.date === todayStr
   );
 
+  const todayDistanceKm = calculateStaffDailyDistanceKm(
+    myId,
+    user?.displayName || user?.name || '',
+    todayStr,
+    allVisits,
+    attendanceLogs
+  );
+
+  const punches = myTodayLog?.punches || [];
+  const lastPunch = punches.length > 0 ? punches[punches.length - 1] : null;
+
+  // Determine current duty status
+  let isCurrentlyOnDuty = false;
+  let isOnBreak = false;
+  let currentDutyLabel = 'Duty Not Started';
+
+  if (punches.length > 0) {
+    if (lastPunch.type === 'in') {
+      isCurrentlyOnDuty = true;
+      currentDutyLabel = '🟢 On Duty';
+    } else {
+      isOnBreak = (lastPunch.note || '').toLowerCase().includes('lunch') || (lastPunch.note || '').toLowerCase().includes('break') || (lastPunch.note || '').toLowerCase().includes('khana');
+      currentDutyLabel = isOnBreak ? '🥪 On Lunch / Break' : '⚪ Shift Concluded';
+    }
+  } else if (myTodayLog?.punchIn) {
+    if (!myTodayLog?.punchOut) {
+      isCurrentlyOnDuty = true;
+      currentDutyLabel = '🟢 On Duty';
+    } else {
+      currentDutyLabel = '⚪ Shift Concluded';
+    }
+  }
+
+  const totalActiveMinutes = myTodayLog?.totalActiveMinutes || 0;
+  const totalBreakMinutes = myTodayLog?.totalBreakMinutes || 0;
+
   const myFollowups = myVisits.filter((v) => v.status === 'Follow Up' && v.followUpDate);
   const dueFollowups = myFollowups.filter((v) => v.followUpDate <= todayStr);
   const overdueFollowups = dueFollowups.filter((v) => v.followUpDate < todayStr);
@@ -618,6 +703,187 @@ export const StaffDashboard = () => {
         </div>
       </div>
 
+      {/* ═══ LIVE ATTENDANCE & MULTI-PUNCH FIELD MOVEMENT TRACKER ═══ */}
+      <div className="bg-white rounded-3xl p-5 sm:p-6 border border-slate-200/90 shadow-sm space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+          <div className="flex items-center gap-3">
+            <div
+              className={`w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-xs ${
+                isCurrentlyOnDuty
+                  ? 'bg-gradient-to-tr from-emerald-600 to-teal-500'
+                  : isOnBreak
+                  ? 'bg-gradient-to-tr from-amber-500 to-orange-500'
+                  : 'bg-gradient-to-tr from-slate-700 to-slate-900'
+              }`}
+            >
+              {isCurrentlyOnDuty ? (
+                <CheckCircle2 size={24} />
+              ) : isOnBreak ? (
+                <Utensils size={22} />
+              ) : (
+                <Clock size={24} />
+              )}
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-extrabold text-slate-900 text-base">Daily Attendance & Field Route</h3>
+                <span
+                  className={`text-xs font-black px-2.5 py-0.5 rounded-full ${
+                    isCurrentlyOnDuty
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : isOnBreak
+                      ? 'bg-amber-100 text-amber-900 animate-pulse'
+                      : 'bg-slate-100 text-slate-600'
+                  }`}
+                >
+                  {currentDutyLabel}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {lastPunch
+                  ? `Last punch: ${lastPunch.time} (${lastPunch.note || lastPunch.type})`
+                  : 'No punches recorded yet today. Punch in below to start duty.'}
+              </p>
+            </div>
+          </div>
+
+          {/* Quick Metrics */}
+          <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+            <div className="px-3.5 py-2 bg-slate-50 rounded-2xl border border-slate-200/80 text-center min-w-[90px]">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Active Duty</span>
+              <span className="text-xs sm:text-sm font-black text-slate-800">
+                {formatDurationMinutes(totalActiveMinutes) || (isCurrentlyOnDuty ? 'Active' : '0m')}
+              </span>
+            </div>
+            <div className="px-3.5 py-2 bg-slate-50 rounded-2xl border border-slate-200/80 text-center min-w-[90px]">
+              <span className="text-[10px] text-slate-400 font-bold uppercase block">Lunch/Break</span>
+              <span className="text-xs sm:text-sm font-black text-amber-700">
+                {formatDurationMinutes(totalBreakMinutes) || '0m'}
+              </span>
+            </div>
+            <div className="px-3.5 py-2 bg-indigo-50/70 rounded-2xl border border-indigo-200 text-center min-w-[100px]">
+              <span className="text-[10px] text-indigo-500 font-bold uppercase block">Traveled Today</span>
+              <span className="text-xs sm:text-sm font-black text-indigo-700">
+                🏍️ {todayDistanceKm} KM
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Punch Action Buttons */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-2 flex-wrap">
+            {!isCurrentlyOnDuty ? (
+              <button
+                type="button"
+                disabled={punchingAction}
+                onClick={() =>
+                  handlePunch('in', isOnBreak ? 'Resumed Duty (Wapis In)' : 'Duty Started')
+                }
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs sm:text-sm font-black shadow-md shadow-emerald-600/20 transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                <LogIn size={16} />
+                <span>
+                  {isOnBreak
+                    ? '🟢 Wapis In (Resume Duty)'
+                    : punches.length > 0
+                    ? '🟢 Punch In Again'
+                    : '🟢 Punch In (Duty Start)'}
+                </span>
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  disabled={punchingAction}
+                  onClick={() => handlePunch('out', 'Lunch Break (Khana)')}
+                  className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-black shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  title="Out for lunch / food break"
+                >
+                  <Utensils size={15} />
+                  <span>🥪 Khana / Lunch Break</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={punchingAction}
+                  onClick={() => handlePunch('out', 'Tea / Short Break')}
+                  className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <Coffee size={15} />
+                  <span>☕ Short Break</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={punchingAction}
+                  onClick={() => handlePunch('out', 'Duty Concluded / Day End')}
+                  className="px-4 py-2.5 bg-slate-900 hover:bg-black text-white rounded-xl text-xs font-black shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  <LogOut size={15} />
+                  <span>🏠 Duty End</span>
+                </button>
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 self-end sm:self-center">
+            {punches.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowPunchHistory((prev) => !prev)}
+                className="text-xs font-bold text-slate-600 hover:text-slate-900 px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 transition cursor-pointer flex items-center gap-1"
+              >
+                <span>{showPunchHistory ? 'Hide Punch Log' : `View ${punches.length} Punches`}</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Detailed Punches Drawer */}
+        {showPunchHistory && punches.length > 0 && (
+          <div className="mt-3 p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
+            <h4 className="text-xs font-black text-slate-700 uppercase tracking-wider mb-2">
+              Today's In / Out Punch Log ({punches.length} Sessions)
+            </h4>
+            <div className="space-y-2">
+              {punches.map((p, idx) => (
+                <div
+                  key={p.id || idx}
+                  className="bg-white p-2.5 rounded-xl border border-slate-200/70 flex items-center justify-between text-xs gap-2"
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`w-6 h-6 rounded-lg font-bold flex items-center justify-center text-[10px] ${
+                        p.type === 'in'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}
+                    >
+                      {p.type === 'in' ? 'IN' : 'OUT'}
+                    </span>
+                    <span className="font-extrabold text-slate-800">{p.time}</span>
+                    <span className="text-slate-600 font-medium">• {p.note}</span>
+                  </div>
+                  {p.location && (
+                    <a
+                      href={
+                        p.location.mapsUrl ||
+                        `https://www.google.com/maps?q=${p.location.latitude},${p.location.longitude}`
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 font-bold hover:underline inline-flex items-center gap-1 text-[11px]"
+                    >
+                      <MapPin size={10} />
+                      <span>GPS ±{p.location.accuracy || 15}m</span>
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Today's Follow-up Reminder Banner */}
       {dueFollowups.length > 0 && (
         <div className={`rounded-2xl border p-5 shadow-sm ${overdueFollowups.length > 0 ? 'bg-rose-50 border-rose-200' : 'bg-amber-50 border-amber-200'}`}>
@@ -738,7 +1004,7 @@ export const StaffDashboard = () => {
       )}
 
       {/* Salary & Earnings Wallet Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         <StatCard
           title="Base Monthly Salary"
           value={formatCurrency(payroll.baseSalary)}
@@ -781,6 +1047,16 @@ export const StaffDashboard = () => {
               : `${payroll.todayVisits} Visits`
           }
           trendPositive={payroll.dailyVisitAchievement >= 100}
+        />
+
+        <StatCard
+          title="Today's Distance"
+          value={`${todayDistanceKm} KM`}
+          subtitle="Phone GPS Field Route"
+          icon={Compass}
+          color="indigo"
+          trend={`${punches.length} Punches`}
+          trendPositive={true}
         />
 
         <StatCard

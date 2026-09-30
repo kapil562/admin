@@ -201,7 +201,7 @@ export const getAttendanceLogs = async () => {
   }
 };
 
-export const punchAttendance = async ({ staffId, staffName, type = 'in', location = null }) => {
+export const punchAttendance = async ({ staffId, staffName, type = 'in', location = null, note = '' }) => {
   const todayDate = new Date().toISOString().split('T')[0];
   const q = query(
     collection(univoDb, 'staff_attendance'),
@@ -211,50 +211,115 @@ export const punchAttendance = async ({ staffId, staffName, type = 'in', locatio
   const snap = await getDocs(q);
 
   const now = new Date();
-  const timeFormatted = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  const timeFormatted = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+  const newPunchItem = {
+    id: `punch_${Date.now()}`,
+    type,
+    time: timeFormatted,
+    isoTime: now.toISOString(),
+    location: location || null,
+    note: note || (type === 'in' ? 'Duty Started / Resumed' : 'Duty Out / Break'),
+  };
 
   if (snap.empty) {
-    // New Punch In
+    // First Punch of the day
+    const punches = [newPunchItem];
     const docData = {
       staffId,
       staffName,
       date: todayDate,
+      punches,
+      currentStatus: type === 'in' ? 'on_duty' : 'off_duty',
+      lastPunchType: type,
       punchIn: {
         time: timeFormatted,
         isoTime: now.toISOString(),
         location,
       },
       punchOut: null,
-      totalHours: 'Working...',
+      totalHours: type === 'in' ? 'Active on Duty' : 'Shift Ended',
+      totalActiveMinutes: 0,
+      totalBreakMinutes: 0,
       status: 'Present',
       createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
     };
     const ref = await addDoc(collection(univoDb, 'staff_attendance'), docData);
     return { id: ref.id, ...docData };
   } else {
-    // Existing record today
+    // Existing attendance doc today — append to punches array
     const existingDoc = snap.docs[0];
     const data = existingDoc.data();
+    const existingPunches = data.punches || [];
 
-    if (type === 'out') {
-      const inIso = data.punchIn?.isoTime ? new Date(data.punchIn.isoTime) : now;
-      const diffMs = now.getTime() - inIso.getTime();
-      const diffHours = (diffMs / (1000 * 60 * 60)).toFixed(1);
-
-      const updateData = {
-        punchOut: {
-          time: timeFormatted,
-          isoTime: now.toISOString(),
-          location,
-        },
-        totalHours: `${diffHours} hrs`,
-        updatedAt: now.toISOString(),
-      };
-
-      await updateDoc(doc(univoDb, 'staff_attendance', existingDoc.id), updateData);
-      return { id: existingDoc.id, ...data, ...updateData };
+    // Migrate older single punchIn / punchOut record if punches array doesn't exist
+    if (existingPunches.length === 0 && data.punchIn) {
+      existingPunches.push({
+        id: 'punch_init_in',
+        type: 'in',
+        time: data.punchIn.time,
+        isoTime: data.punchIn.isoTime || data.createdAt,
+        location: data.punchIn.location,
+        note: 'Duty Started',
+      });
+      if (data.punchOut) {
+        existingPunches.push({
+          id: 'punch_init_out',
+          type: 'out',
+          time: data.punchOut.time,
+          isoTime: data.punchOut.isoTime || data.updatedAt,
+          location: data.punchOut.location,
+          note: 'Shift Ended',
+        });
+      }
     }
-    return { id: existingDoc.id, ...data };
+
+    const updatedPunches = [...existingPunches, newPunchItem];
+
+    // Calculate total active duty minutes and total break minutes
+    let totalActiveMinutes = 0;
+    let totalBreakMinutes = 0;
+    let lastInIso = null;
+    let lastOutIso = null;
+
+    updatedPunches.forEach((p) => {
+      const pTime = new Date(p.isoTime).getTime();
+      if (p.type === 'in') {
+        lastInIso = pTime;
+        if (lastOutIso != null && pTime > lastOutIso) {
+          totalBreakMinutes += Math.round((pTime - lastOutIso) / (1000 * 60));
+        }
+      } else if (p.type === 'out') {
+        lastOutIso = pTime;
+        if (lastInIso != null && pTime > lastInIso) {
+          totalActiveMinutes += Math.round((pTime - lastInIso) / (1000 * 60));
+        }
+      }
+    });
+
+    const activeFormatted =
+      totalActiveMinutes >= 60
+        ? `${Math.floor(totalActiveMinutes / 60)}h ${totalActiveMinutes % 60}m`
+        : `${totalActiveMinutes}m`;
+
+    const firstIn = updatedPunches.find((p) => p.type === 'in');
+    const lastOut = [...updatedPunches].reverse().find((p) => p.type === 'out');
+
+    const updateData = {
+      punches: updatedPunches,
+      currentStatus: type === 'in' ? 'on_duty' : 'off_duty',
+      lastPunchType: type,
+      totalActiveMinutes,
+      totalBreakMinutes,
+      totalHours: type === 'in' ? `${activeFormatted} (On Duty)` : `${activeFormatted} (Out / Break)`,
+      punchIn: firstIn ? { time: firstIn.time, isoTime: firstIn.isoTime, location: firstIn.location } : data.punchIn,
+      punchOut: lastOut ? { time: lastOut.time, isoTime: lastOut.isoTime, location: lastOut.location } : data.punchOut,
+      updatedAt: now.toISOString(),
+    };
+
+    await updateDoc(doc(univoDb, 'staff_attendance', existingDoc.id), updateData);
+    return { id: existingDoc.id, ...data, ...updateData };
   }
 };
 
