@@ -41,9 +41,11 @@ import {
   Gift,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useAuth } from '../context/AuthContext';
 
 export const PlansManagement = () => {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
   const [activeTab, setActiveTab] = useState('subscription');
 
   // Subscription Modal State
@@ -293,7 +295,7 @@ export const PlansManagement = () => {
         title="Plans & Packages"
         subtitle="Manage SaaS pricing tiers, feature gates, and WhatsApp automated recharge packs."
         action={
-          activeTab !== 'verticals' && (
+          hasPermission('plans', 'create') && activeTab !== 'verticals' && (
             <button
               onClick={() => (activeTab === 'subscription' ? openSubModal() : openWaModal())}
               className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition cursor-pointer"
@@ -472,24 +474,28 @@ export const PlansManagement = () => {
 
                 {/* Actions */}
                 <div className="flex items-center justify-end gap-2 pt-5 mt-5 border-t border-slate-100">
-                  <button
-                    onClick={() => openSubModal(plan)}
-                    className="p-2 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition cursor-pointer"
-                    title="Edit Plan"
-                  >
-                    <Edit2 size={16} />
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (window.confirm(`Delete plan "${plan.name}"?`)) {
-                        subDeleteMutation.mutate(plan.id);
-                      }
-                    }}
-                    className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                    title="Delete Plan"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  {hasPermission('plans', 'edit') && (
+                    <button
+                      onClick={() => openSubModal(plan)}
+                      className="p-2 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition cursor-pointer"
+                      title="Edit Plan"
+                    >
+                      <Edit2 size={16} />
+                    </button>
+                  )}
+                  {hasPermission('plans', 'delete') && (
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`Delete plan "${plan.name}"?`)) {
+                          subDeleteMutation.mutate(plan.id);
+                        }
+                      }}
+                      className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                      title="Delete Plan"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
                 </div>
               </div>
               );

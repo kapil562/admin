@@ -41,9 +41,11 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useAuth } from '../context/AuthContext';
 
 export const LibraryClients = () => {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
@@ -438,33 +440,37 @@ export const LibraryClients = () => {
                           <span>Inspect</span>
                         </button>
 
-                        <button
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setOverrideTarget(client);
-                          }}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold rounded-lg transition cursor-pointer z-10 relative"
-                          title="Override Subscription"
-                        >
-                          <ShieldCheck size={13} />
-                          <span>Manage Plan</span>
-                        </button>
+                        {hasPermission('clients', 'edit') && (
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setOverrideTarget(client);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-bold rounded-lg transition cursor-pointer z-10 relative"
+                            title="Override Subscription"
+                          >
+                            <ShieldCheck size={13} />
+                            <span>Manage Plan</span>
+                          </button>
+                        )}
 
-                        <button
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setCleanTarget(client);
-                            setCleanMode('data_only');
-                            setCleanConfirmChecked(false);
-                          }}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-bold rounded-lg transition cursor-pointer z-10 relative"
-                          title="Clean data (reset students, seats, fees)"
-                        >
-                          <Trash2 size={13} />
-                          <span>Clean Data</span>
-                        </button>
+                        {hasPermission('clients', 'delete') && (
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setCleanTarget(client);
+                              setCleanMode('data_only');
+                              setCleanConfirmChecked(false);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-bold rounded-lg transition cursor-pointer z-10 relative"
+                            title="Clean data (reset students, seats, fees)"
+                          >
+                            <Trash2 size={13} />
+                            <span>Clean Data</span>
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

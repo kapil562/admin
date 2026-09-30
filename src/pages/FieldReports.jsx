@@ -363,10 +363,12 @@ export const FieldReports = () => {
         isAdmin: isOwnerOrAdmin,
         phone: s.phone || '',
         email: s.email || '',
+        dailyTargetVisits: Number(s.compensation?.dailyTargetVisits) || 0,
+        dailyTargetDeals: Number(s.compensation?.dailyTargetDeals) || 0,
         totalVisits: 0,
         todayVisits: 0,
+        todayDeals: 0,
         weekVisits: 0,
-        monthVisits: 0,
         demos: 0,
         deals: 0,
         photos: 0,
@@ -399,10 +401,12 @@ export const FieldReports = () => {
               isAdmin: isAdm,
               phone: '',
               email: '',
+              dailyTargetVisits: 0,
+              dailyTargetDeals: 0,
               totalVisits: 0,
               todayVisits: 0,
+              todayDeals: 0,
               weekVisits: 0,
-              monthVisits: 0,
               demos: 0,
               deals: 0,
               photos: 0,
@@ -418,9 +422,12 @@ export const FieldReports = () => {
       const entry = staffMap.get(key);
       if (entry) {
         entry.totalVisits += 1;
-        if ((v.createdAt || '').startsWith(todayStr)) entry.todayVisits += 1;
+        const isToday = (v.createdAt || '').startsWith(todayStr);
+        if (isToday) {
+          entry.todayVisits += 1;
+          if (v.status === 'Deal Closed') entry.todayDeals += 1;
+        }
         if ((v.createdAt || '') >= weekAgo) entry.weekVisits += 1;
-        if ((v.createdAt || '') >= monthStart) entry.monthVisits += 1;
         if (v.demoGiven) entry.demos += 1;
         if (v.status === 'Deal Closed') entry.deals += 1;
         if (v.photoUrl) entry.photos += 1;
@@ -686,10 +693,10 @@ export const FieldReports = () => {
         `"${item.staffRole || ''}"`,
         `"${(item.query || '').replace(/"/g, '""')}"`,
         `"${item.category || ''}"`,
-        `"${rKm != null ? `${rKm} km` : 'Default 50 km'}"`,
-        `"${item.limitCount != null ? item.limitCount : 'Unlimited'}"`,
+        `"${rKm != null ? `${rKm} km radius` : 'All Distance'}"`,
+        `"${item.limitCount != null ? `Max ${item.limitCount}` : 'All Results'}"`,
         `"${item.resultsCount || 0}"`,
-        `"${(item.location?.locationName || '').replace(/"/g, '""')}"`,
+        `"${(item.location?.locationName || 'Live Location').replace(/\s*\(Default Location\)/gi, '').replace(/"/g, '""')}"`,
         `"${lat}"`,
         `"${lng}"`,
         `"${mapsLink}"`,
@@ -1032,12 +1039,12 @@ export const FieldReports = () => {
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50/75 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
                     <th className="px-5 py-3.5">Staff Rep</th>
+                    <th className="px-4 py-3.5 text-center">Today's Visits & Target</th>
+                    <th className="px-4 py-3.5 text-center">Today's Deals</th>
                     <th className="px-4 py-3.5 text-center">Total Visits</th>
-                    <th className="px-4 py-3.5 text-center">Today</th>
                     <th className="px-4 py-3.5 text-center">This Week</th>
-                    <th className="px-4 py-3.5 text-center">This Month</th>
                     <th className="px-4 py-3.5 text-center">Demos</th>
-                    <th className="px-4 py-3.5 text-center">Deals Won</th>
+                    <th className="px-4 py-3.5 text-center">Total Deals</th>
                     <th className="px-4 py-3.5 text-center">Ground Time</th>
                     <th className="px-4 py-3.5 text-center">GPS %</th>
                     <th className="px-5 py-3.5">Last Visit Entry Logged</th>
@@ -1081,28 +1088,56 @@ export const FieldReports = () => {
                             </div>
                           </td>
 
+                          {/* Today's Visits & Daily Target */}
+                          <td className="px-4 py-3.5 text-center">
+                            <div className="flex flex-col items-center gap-1">
+                              <span className={`px-2.5 py-0.5 rounded-full font-black text-xs ${
+                                s.todayVisits > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
+                              }`}>
+                                {s.todayVisits} {s.dailyTargetVisits > 0 ? `/ ${s.dailyTargetVisits}` : ''}
+                              </span>
+                              {s.dailyTargetVisits > 0 && (
+                                <span className={`text-[10px] font-black px-1.5 py-0.2 rounded border ${
+                                  s.todayVisits >= s.dailyTargetVisits
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                                    : 'bg-amber-50 text-amber-700 border-amber-200'
+                                }`}>
+                                  {s.todayVisits >= s.dailyTargetVisits ? 'Goal Met ✓' : `${Math.round((s.todayVisits / s.dailyTargetVisits) * 100)}% Done`}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Today's Deals */}
+                          <td className="px-4 py-3.5 text-center">
+                            <div className="flex flex-col items-center gap-1">
+                              <span className={`font-black text-xs ${s.todayDeals > 0 ? 'text-emerald-700' : 'text-slate-400'}`}>
+                                {s.todayDeals} {s.dailyTargetDeals > 0 ? `/ ${s.dailyTargetDeals}` : ''}
+                              </span>
+                              {s.dailyTargetDeals > 0 && (
+                                <span className="text-[10px] font-bold text-slate-500">
+                                  {s.todayDeals >= s.dailyTargetDeals ? '✓ Target Hit' : `${Math.round((s.todayDeals / s.dailyTargetDeals) * 100)}%`}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Total Visits */}
                           <td className="px-4 py-3.5 text-center">
                             <span className="font-black text-slate-900 text-sm">{s.totalVisits}</span>
                           </td>
 
-                          <td className="px-4 py-3.5 text-center">
-                            <span className={`px-2 py-0.5 rounded-full font-bold text-xs ${s.todayVisits > 0 ? 'bg-emerald-100 text-emerald-800' : 'text-slate-400'}`}>
-                              {s.todayVisits}
-                            </span>
-                          </td>
-
+                          {/* This Week */}
                           <td className="px-4 py-3.5 text-center font-bold text-slate-700">
                             {s.weekVisits}
                           </td>
 
-                          <td className="px-4 py-3.5 text-center font-bold text-slate-700">
-                            {s.monthVisits}
-                          </td>
-
+                          {/* Demos Given */}
                           <td className="px-4 py-3.5 text-center font-semibold text-slate-700">
                             {s.demos > 0 ? `💻 ${s.demos}` : '-'}
                           </td>
 
+                          {/* Total Deals Won */}
                           <td className="px-4 py-3.5 text-center">
                             <span className={`font-black ${s.deals > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
                               {s.deals > 0 ? `🎉 ${s.deals}` : '-'}
@@ -1907,12 +1942,12 @@ export const FieldReports = () => {
                                 const rKm = item.radiusKm != null ? (Number(item.radiusKm) >= 1000 ? Math.round(Number(item.radiusKm) / 1000) : Number(item.radiusKm)) : null;
                                 return (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-bold">
-                                    📏 {rKm != null ? `${rKm} km radius` : 'Default 50 km'}
+                                    📏 {rKm != null ? `${rKm} km radius` : 'All Distance'}
                                   </span>
                                 );
                               })()}
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-bold">
-                                🎯 {item.limitCount != null ? `Max ${item.limitCount}` : 'Unlimited'}
+                                🎯 {item.limitCount != null ? `Max ${item.limitCount}` : 'All Results'}
                               </span>
                             </div>
                           </td>
@@ -1930,7 +1965,7 @@ export const FieldReports = () => {
                             <div className="space-y-0.5">
                               <p className="font-bold text-slate-800 text-xs truncate max-w-xs flex items-center gap-1">
                                 <MapPin size={12} className="text-rose-500 shrink-0" />
-                                <span>{item.location?.locationName || 'Live Location'}</span>
+                                <span>{(item.location?.locationName || 'Live Location').replace(/\s*\(Default Location\)/gi, '')}</span>
                               </p>
                               {lat && lng ? (
                                 <div className="flex items-center gap-2">

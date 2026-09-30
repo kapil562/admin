@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getExpenses, addExpense, deleteExpense, EXPENSE_CATEGORIES } from '../firebase/services/financeService';
+import { useAuth } from '../context/AuthContext';
 import { PageHeader } from '../components/ui/PageHeader';
 import { StatCard } from '../components/ui/StatCard';
 import { Badge } from '../components/ui/Badge';
@@ -23,6 +24,7 @@ import toast from 'react-hot-toast';
 
 export const Finances = () => {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
   const [showModal, setShowModal] = useState(false);
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -124,13 +126,15 @@ export const Finances = () => {
         title="Expenses & Finances"
         subtitle="Track Univo Infotech operational costs, server infrastructure, marketing, and salaries."
         action={
-          <button
-            onClick={() => setShowModal(true)}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition cursor-pointer"
-          >
-            <Plus size={16} />
-            <span>Add Expense</span>
-          </button>
+          hasPermission('finances', 'create') && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition cursor-pointer"
+            >
+              <Plus size={16} />
+              <span>Add Expense</span>
+            </button>
+          )
         }
       />
 
@@ -223,13 +227,15 @@ export const Finances = () => {
                       -{formatCurrency(exp.amount)}
                     </td>
                     <td className="px-5 py-4 text-right whitespace-nowrap">
-                      <button
-                        onClick={() => handleDelete(exp.id, exp.description)}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                        title="Delete expense"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      {hasPermission('finances', 'delete') && (
+                        <button
+                          onClick={() => handleDelete(exp.id, exp.description)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                          title="Delete expense"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))

@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getFieldVisits, logFieldVisit, updateFieldVisit, updateVisitStatus, deleteFieldVisit, getCurrentGPSLocation, logSearchAudit } from '../firebase/services/marketingService';
-import { getStaffUsers } from '../firebase/services/staffService';
+import { getStaffUsers, calculateStaffPayroll } from '../firebase/services/staffService';
 import { searchNearbyLibraries, searchLibrariesByText, formatDistance, getNavigationUrl, getPlaceMapUrl, geocodeAddress, reverseGeocode, parseAddressDetails, getPlaceDetails } from '../services/googleMapsService';
 import { useAuth } from '../context/AuthContext';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -308,18 +308,32 @@ export const FieldMarketing = () => {
   // Form state
   const [form, setForm] = useState(initialFormState);
 
-  // Fetch staff users (admin only)
+  // Fetch staff users for management and compensation targets
   const { data: staffList = [] } = useQuery({
     queryKey: ['admin_staff_users'],
     queryFn: getStaffUsers,
-    enabled: isSuperAdmin,
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
+
+  const myStaffId = user?.uid || user?.id;
+  const staffData = useMemo(() => {
+    return (
+      staffList.find(
+        (s) => s.id === myStaffId || s.email?.toLowerCase() === user?.email?.toLowerCase()
+      ) || user
+    );
+  }, [staffList, myStaffId, user]);
 
   // Fetch visits
   const { data: visits = [], isLoading } = useQuery({
     queryKey: ['admin_field_visits'],
     queryFn: getFieldVisits,
   });
+
+  const staffPayroll = useMemo(() => {
+    return calculateStaffPayroll(staffData, visits);
+  }, [staffData, visits]);
 
   // Add mutation
   const addMutation = useMutation({
@@ -475,7 +489,7 @@ export const FieldMarketing = () => {
             latitude: targetLoc.latitude,
             longitude: targetLoc.longitude,
             accuracy: targetLoc.accuracy || null,
-            locationName: currentLocationName || 'Live Location',
+            locationName: (currentLocationName || 'Live Location').replace(/\s*\(Default Location\)/gi, ''),
           },
           createdAt: new Date().toISOString(),
         });
@@ -521,10 +535,6 @@ export const FieldMarketing = () => {
     setManualSearchQuery('');
     setNearbyLibraries([]);
     setNearbySearchDone(false);
-    setSearchRadius('');
-    setSearchLimit('');
-    setCustomRadiusMode(false);
-    setCustomLimitMode(false);
   };
 
   const handleManualSearch = (e) => {
@@ -1599,6 +1609,85 @@ export const FieldMarketing = () => {
           </div>
         }
       />
+
+      {/* ═══ STAFF PERSONAL WORKSPACE: Live Target Progress Banner ═══ */}
+      {!isSuperAdmin && (
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-950 rounded-2xl p-4 sm:p-5 text-white shadow-md border border-indigo-800/40">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-11 h-11 rounded-2xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 flex items-center justify-center shrink-0 shadow-xs">
+                <Target size={22} className="text-emerald-400" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-black text-white">
+                    ⚡ My Daily Targets & Live Progress
+                  </span>
+                  <span className="px-2.5 py-0.5 bg-emerald-500/20 border border-emerald-400/40 rounded-full text-[10px] font-black text-emerald-300">
+                    Live Real-Time
+                  </span>
+                </div>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  Keep visiting clients and closing subscriptions to hit your daily performance targets!
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full md:w-auto shrink-0">
+              {/* Today's Visits Target */}
+              <div className="bg-white/10 backdrop-blur-xs rounded-xl p-3 border border-white/10 min-w-[140px]">
+                <div className="flex items-center justify-between text-xs text-slate-300 mb-1">
+                  <span className="font-semibold text-amber-300">⚡ Today's Visits</span>
+                  <span className="font-black text-amber-300">{staffPayroll.dailyVisitAchievement}%</span>
+                </div>
+                <p className="text-lg font-black text-white">
+                  {staffPayroll.todayVisits} <span className="text-xs font-normal text-slate-400">{staffPayroll.dailyTargetVisits > 0 ? `/ ${staffPayroll.dailyTargetVisits}` : ''}</span>
+                </p>
+                <div className="w-full bg-white/10 rounded-full h-1.5 mt-2 overflow-hidden">
+                  <div
+                    className="bg-amber-400 h-1.5 rounded-full transition-all duration-500"
+                    style={{ width: `${Math.min(100, staffPayroll.dailyVisitAchievement)}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Today's Deals Goal */}
+              <div className="bg-white/10 backdrop-blur-xs rounded-xl p-3 border border-white/10 min-w-[140px]">
+                <div className="flex items-center justify-between text-xs text-slate-300 mb-1">
+                  <span className="font-semibold text-emerald-300">🎯 Today's Deals</span>
+                  <span className="font-black text-emerald-300">{staffPayroll.dailyDealAchievement}%</span>
+                </div>
+                <p className="text-lg font-black text-white">
+                  {staffPayroll.todayDeals} <span className="text-xs font-normal text-slate-400">{staffPayroll.dailyTargetDeals > 0 ? `/ ${staffPayroll.dailyTargetDeals}` : ''}</span>
+                </p>
+                <div className="w-full bg-white/10 rounded-full h-1.5 mt-2 overflow-hidden">
+                  <div
+                    className="bg-emerald-400 h-1.5 rounded-full transition-all duration-500"
+                    style={{ width: `${Math.min(100, staffPayroll.dailyDealAchievement)}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Total Visits Logged */}
+              <div className="bg-white/10 backdrop-blur-xs rounded-xl p-3 border border-white/10 min-w-[140px]">
+                <div className="flex items-center justify-between text-xs text-slate-300 mb-1">
+                  <span className="font-semibold text-blue-300">📍 All-Time Work</span>
+                  <span className="font-black text-blue-300">{staffPayroll.dealsClosed} Won</span>
+                </div>
+                <p className="text-lg font-black text-white">
+                  {staffPayroll.totalVisits} <span className="text-xs font-normal text-slate-400">Total Visits</span>
+                </p>
+                <div className="w-full bg-white/10 rounded-full h-1.5 mt-2 overflow-hidden">
+                  <div
+                    className="bg-blue-400 h-1.5 rounded-full"
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ═══ BOOSTER BANNER: Competitor Expiry Radar ═══ */}
       {expiringCompetitors.length > 0 && (

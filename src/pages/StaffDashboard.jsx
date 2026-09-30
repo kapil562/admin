@@ -42,6 +42,7 @@ import {
   Send,
   Bell,
   RotateCcw,
+  Target,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -171,6 +172,8 @@ export const StaffDashboard = () => {
   const { data: staffList = [] } = useQuery({
     queryKey: ['admin_staff_users'],
     queryFn: getStaffUsers,
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 
   // 2. Fetch Active Software Verticals
@@ -576,9 +579,24 @@ export const StaffDashboard = () => {
       <div className="bg-gradient-to-r from-slate-900 via-blue-950 to-indigo-950 rounded-3xl p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
         <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <div className="space-y-2">
-            <span className="px-3 py-1 bg-white/10 rounded-full text-xs font-bold text-blue-200">
-              {user?.roleLabel || 'Field Marketing Executive'}
-            </span>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="px-3 py-1 bg-white/10 rounded-full text-xs font-bold text-blue-200">
+                {user?.roleLabel || 'Field Marketing Executive'}
+              </span>
+              <span className="px-3 py-1 bg-amber-500/20 border border-amber-400/40 rounded-full text-xs font-black text-amber-300 flex items-center gap-1.5 shadow-2xs">
+                <span>⚡ Today's Visits: {payroll.todayVisits} {payroll.dailyTargetVisits > 0 ? `/ ${payroll.dailyTargetVisits}` : ''}</span>
+              </span>
+              {payroll.dailyTargetDeals > 0 && (
+                <span className="px-3 py-1 bg-emerald-500/20 border border-emerald-400/40 rounded-full text-xs font-black text-emerald-300 flex items-center gap-1.5 shadow-2xs">
+                  <Target size={13} className="text-emerald-400" />
+                  <span>Today's Deals: {payroll.todayDeals} / {payroll.dailyTargetDeals}</span>
+                </span>
+              )}
+              <span className="px-3 py-1 bg-blue-500/20 border border-blue-400/40 rounded-full text-xs font-black text-blue-300 flex items-center gap-1.5 shadow-2xs">
+                <Navigation size={13} className="text-blue-400" />
+                <span>Total Logged: {payroll.totalVisits} Visits · {payroll.dealsClosed} Won</span>
+              </span>
+            </div>
             <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
               Hello, {user?.displayName || 'Team Member'}! 👋
             </h1>
@@ -720,7 +738,7 @@ export const StaffDashboard = () => {
       )}
 
       {/* Salary & Earnings Wallet Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard
           title="Base Monthly Salary"
           value={formatCurrency(payroll.baseSalary)}
@@ -750,29 +768,113 @@ export const StaffDashboard = () => {
         />
 
         <StatCard
-          title="Monthly Target"
-          value={`${payroll.dealsClosed} / ${payroll.targetDeals}`}
-          subtitle={`${payroll.targetAchievement}% of Target Reached`}
+          title="Today's Visits"
+          value={`${payroll.todayVisits} ${payroll.dailyTargetVisits > 0 ? `/ ${payroll.dailyTargetVisits}` : ''}`}
+          subtitle={payroll.dailyTargetVisits > 0 ? `${payroll.dailyVisitAchievement}% of Daily Visits Goal` : 'Logged Today'}
           icon={Navigation}
           color="amber"
+          trend={
+            payroll.dailyTargetVisits > 0
+              ? payroll.dailyTargetVisits - payroll.todayVisits > 0
+                ? `${payroll.dailyTargetVisits - payroll.todayVisits} to go today`
+                : 'Daily Target Hit! 🎯'
+              : `${payroll.todayVisits} Visits`
+          }
+          trendPositive={payroll.dailyVisitAchievement >= 100}
+        />
+
+        <StatCard
+          title="All-Time Visits"
+          value={payroll.totalVisits}
+          subtitle={`${payroll.dealsClosed} deals closed won`}
+          icon={Navigation}
+          color="blue"
+          trend={`${payroll.dealsClosed} Won`}
+          trendPositive={true}
         />
       </div>
 
-      {/* Target Progress Bar */}
-      <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs space-y-2">
-        <div className="flex items-center justify-between text-xs">
-          <span className="font-bold text-slate-800">Monthly Target Achievement</span>
-          <span className="font-extrabold text-blue-600">{payroll.targetAchievement}%</span>
+      {/* Daily Target Progress Bars */}
+      <div className={`grid grid-cols-1 ${payroll.dailyTargetDeals > 0 ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-4`}>
+        {/* Today's Daily Visits Target Card */}
+        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-bold text-slate-800 flex items-center gap-1.5">
+              <span className="text-[10px] font-black uppercase text-amber-800 bg-amber-100 border border-amber-300 px-1 py-0.2 rounded">
+                ⚡ Today
+              </span>
+              <span>Daily Visits ({payroll.todayVisits} {payroll.dailyTargetVisits > 0 ? `/ ${payroll.dailyTargetVisits}` : ''})</span>
+            </span>
+            {payroll.dailyTargetVisits > 0 && (
+              <span className="font-extrabold text-amber-700">{payroll.dailyVisitAchievement}%</span>
+            )}
+          </div>
+          <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
+            <div
+              className="bg-gradient-to-r from-amber-500 to-orange-500 h-full rounded-full transition-all duration-500"
+              style={{ width: `${Math.min(100, payroll.dailyVisitAchievement || (payroll.todayVisits > 0 ? 100 : 0))}%` }}
+            />
+          </div>
+          <div className="flex items-center justify-between text-[11px] text-slate-400 font-medium">
+            <span>{payroll.todayVisits} Visits Today</span>
+            <span className="font-bold text-slate-700">
+              {payroll.dailyTargetVisits > 0
+                ? payroll.dailyTargetVisits - payroll.todayVisits > 0
+                  ? `${payroll.dailyTargetVisits - payroll.todayVisits} more today ⚡`
+                  : 'Daily Target Hit! 🎯'
+                : 'Keep logging visits'}
+            </span>
+          </div>
         </div>
-        <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
-          <div
-            className="bg-gradient-to-r from-blue-600 to-emerald-500 h-full rounded-full transition-all duration-500"
-            style={{ width: `${payroll.targetAchievement}%` }}
-          />
-        </div>
-        <div className="flex items-center justify-between text-[11px] text-slate-400 font-medium">
-          <span>{payroll.totalVisits} Field Visits Completed</span>
-          <span>{payroll.targetDeals - payroll.dealsClosed > 0 ? `${payroll.targetDeals - payroll.dealsClosed} more deals to target` : 'Target Achieved! 🎯'}</span>
+
+        {/* Today's Daily Deals Target Card (if configured) */}
+        {payroll.dailyTargetDeals > 0 && (
+          <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs space-y-2">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                <Award size={14} className="text-emerald-600" />
+                <span>Today's Deals ({payroll.todayDeals} / {payroll.dailyTargetDeals})</span>
+              </span>
+              <span className="font-extrabold text-emerald-600">{payroll.dailyDealAchievement}%</span>
+            </div>
+            <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
+              <div
+                className="bg-gradient-to-r from-emerald-500 to-teal-600 h-full rounded-full transition-all duration-500"
+                style={{ width: `${payroll.dailyDealAchievement}%` }}
+              />
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-slate-400 font-medium">
+              <span>{payroll.todayDeals} Deals Today</span>
+              <span className="font-bold text-slate-700">
+                {payroll.dailyTargetDeals - payroll.todayDeals > 0
+                  ? `${payroll.dailyTargetDeals - payroll.todayDeals} more to close 🏆`
+                  : 'Deals Target Hit! 🏆'}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* All-Time Visits & Performance Summary */}
+        <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-bold text-slate-800 flex items-center gap-1.5">
+              <Navigation size={14} className="text-blue-600" />
+              <span>All-Time Work Summary</span>
+            </span>
+            <span className="font-extrabold text-blue-600">{payroll.dealsClosed} Won</span>
+          </div>
+          <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden">
+            <div
+              className="bg-gradient-to-r from-blue-600 to-indigo-500 h-full rounded-full"
+              style={{ width: '100%' }}
+            />
+          </div>
+          <div className="flex items-center justify-between text-[11px] text-slate-400 font-medium">
+            <span>{payroll.totalVisits} Total Visits Logged</span>
+            <span className="font-bold text-emerald-700">
+              ₹{payroll.commissionEarned.toLocaleString('en-IN')} Commission
+            </span>
+          </div>
         </div>
       </div>
 

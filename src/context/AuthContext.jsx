@@ -1,12 +1,13 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { 
   signInWithEmailAndPassword, 
   signOut, 
   onAuthStateChanged 
 } from 'firebase/auth';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, getDocs, doc, onSnapshot } from 'firebase/firestore';
 import { univoAuth, libraryAuth, univoDb } from '../firebase/config';
-
+import { ROLE_PRESETS } from '../firebase/services/staffService';
+import toast from 'react-hot-toast';
 
 const AuthContext = createContext();
 
@@ -29,7 +30,9 @@ const KNOWN_SUPER_ADMIN_EMAILS = [
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const staffSnapshotUnsubRef = useRef(null);
 
+  // 1. Initial Session Load & Firebase Auth Handlers
   useEffect(() => {
     // 1. Check local session cache first
     const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -76,6 +79,69 @@ export const AuthProvider = ({ children }) => {
       unsubLibrary();
     };
   }, []);
+
+  // 2. Real-Time Staff User Listener: Sync role, permissions & status immediately
+  useEffect(() => {
+    if (staffSnapshotUnsubRef.current) {
+      staffSnapshotUnsubRef.current();
+      staffSnapshotUnsubRef.current = null;
+    }
+
+    const staffId = user?.id || user?.uid;
+    if (!staffId || staffId === 'master_admin_session') {
+      return;
+    }
+
+    try {
+      const staffRef = doc(univoDb, 'staff_users', staffId);
+      staffSnapshotUnsubRef.current = onSnapshot(
+        staffRef,
+        (snap) => {
+          if (!snap.exists()) {
+            return;
+          }
+
+          const liveData = snap.data();
+          if (liveData.status === 'inactive') {
+            toast.error('Your staff account has been deactivated. Logging out.');
+            logout();
+            return;
+          }
+
+          const isOwner = liveData.role === 'owner' || liveData.role === 'super_admin';
+          const updatedSession = {
+            uid: snap.id,
+            id: snap.id,
+            email: liveData.email,
+            displayName: liveData.name || (isOwner ? '👑 Business Owner' : 'Staff Member'),
+            name: liveData.name || 'Staff Member',
+            role: isOwner ? 'super_admin' : (liveData.role || 'marketing'),
+            originalRole: liveData.role,
+            roleLabel: liveData.roleLabel || (isOwner ? '👑 Business Owner / Super Admin' : 'Staff Member'),
+            permissions: liveData.permissions || (ROLE_PRESETS[liveData.role]?.permissions || {}),
+            phone: liveData.phone || '',
+            compensation: liveData.compensation || {},
+            status: liveData.status || 'active',
+          };
+
+          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updatedSession));
+          setUser(updatedSession);
+        },
+        (err) => {
+          console.warn('Real-time staff sync listener error:', err);
+        }
+      );
+    } catch (e) {
+      console.warn('Failed to attach staff snapshot listener:', e);
+    }
+
+    return () => {
+      if (staffSnapshotUnsubRef.current) {
+        staffSnapshotUnsubRef.current();
+        staffSnapshotUnsubRef.current = null;
+      }
+    };
+  }, [user?.id]);
 
   const login = async (email, password) => {
     const cleanEmail = (email || '').trim().toLowerCase();
@@ -141,10 +207,11 @@ export const AuthProvider = ({ children }) => {
           name: staffMember.name || 'Staff Member',
           role: isOwner ? 'super_admin' : (staffMember.role || 'marketing'),
           originalRole: staffMember.role,
-          roleLabel: staffMember.roleLabel || (isOwner ? '👑 Business Owner' : 'Staff Member'),
-          permissions: staffMember.permissions || {},
+          roleLabel: staffMember.roleLabel || (isOwner ? '👑 Business Owner / Super Admin' : 'Staff Member'),
+          permissions: staffMember.permissions || (ROLE_PRESETS[staffMember.role]?.permissions || {}),
           phone: staffMember.phone || '',
           compensation: staffMember.compensation || {},
+          status: staffMember.status || 'active',
         };
         setUser(staffSession);
         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(staffSession));
@@ -197,18 +264,51 @@ export const AuthProvider = ({ children }) => {
     return masterAdmin;
   };
 
+  const updateCurrentUser = (updates) => {
+    setUser((prev) => {
+      const merged = { ...prev, ...updates };
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(merged));
+      return merged;
+    });
+  };
+
+  /**
+   * Evaluates if the current user has permission for a specific module and action
+   * (e.g. hasPermission('marketing', 'create'))
+   */
   const hasPermission = (moduleName, action = 'view') => {
     if (!user) return false;
-    if (!user.role || user.role === 'super_admin' || user.role === 'owner') return true;
+    // Super admin and Owners have unrestricted authority across all modules
+    if (
+      !user.role ||
+      user.role === 'super_admin' ||
+      user.role === 'owner' ||
+      user.originalRole === 'owner'
+    ) {
+      return true;
+    }
 
+    // Check specific module permission on user profile
     const modulePerms = user.permissions?.[moduleName];
     if (modulePerms && modulePerms[action] !== undefined) {
       return Boolean(modulePerms[action]);
     }
+
+    // Fallback to role presets if not explicitly configured in permissions object
+    const effectiveRole = user.originalRole || user.role;
+    const preset = ROLE_PRESETS[effectiveRole];
+    if (preset?.permissions?.[moduleName]?.[action] !== undefined) {
+      return Boolean(preset.permissions[moduleName][action]);
+    }
+
     return false;
   };
 
   const logout = async () => {
+    if (staffSnapshotUnsubRef.current) {
+      staffSnapshotUnsubRef.current();
+      staffSnapshotUnsubRef.current = null;
+    }
     try {
       await signOut(univoAuth);
     } catch (e) {}
@@ -225,6 +325,7 @@ export const AuthProvider = ({ children }) => {
     login,
     loginAsMasterAdmin,
     logout,
+    updateCurrentUser,
     hasPermission,
     isAuthenticated: !!user,
   };

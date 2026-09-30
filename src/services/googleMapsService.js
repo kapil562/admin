@@ -503,18 +503,25 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
           };
 
           if (lat && lng) {
-            const apiRadiusMeters = (radius && Number(radius) > 0)
-              ? Number(radius)
-              : 50000.0;
-
-            if (apiRadiusMeters <= 50000.0) {
-              body.locationRestriction = {
-                circle: {
-                  center: { latitude: lat, longitude: lng },
-                  radius: apiRadiusMeters,
-                },
-              };
+            if (radius && Number(radius) > 0) {
+              const userRadiusMeters = Number(radius);
+              if (userRadiusMeters <= 50000.0) {
+                body.locationRestriction = {
+                  circle: {
+                    center: { latitude: lat, longitude: lng },
+                    radius: userRadiusMeters,
+                  },
+                };
+              } else {
+                body.locationBias = {
+                  circle: {
+                    center: { latitude: lat, longitude: lng },
+                    radius: 50000.0,
+                  },
+                };
+              }
             } else {
+              // No radius restriction requested by user: bias toward current location
               body.locationBias = {
                 circle: {
                   center: { latitude: lat, longitude: lng },

@@ -19,6 +19,7 @@ import {
   Navigation,
   CalendarCheck,
   UserCog,
+  ShieldAlert,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -83,6 +84,15 @@ export const DashboardLayout = () => {
       items: group.items.filter((item) => hasPermission(item.module, 'view')),
     }))
     .filter((group) => group.items.length > 0);
+
+  const allNavItems = navigationGroups.flatMap((g) => g.items);
+  const matchedRouteItem = allNavItems.find((item) =>
+    item.path === '/'
+      ? location.pathname === item.path
+      : location.pathname.startsWith(item.path)
+  );
+
+  const isCurrentRouteAllowed = !matchedRouteItem || hasPermission(matchedRouteItem.module, 'view');
 
   const currentItem = allowedGroups
     .flatMap((g) => g.items)
@@ -250,7 +260,27 @@ export const DashboardLayout = () => {
 
         {/* Main Content Body */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
-          <Outlet />
+          {!isCurrentRouteAllowed ? (
+            <div className="py-16 px-4 text-center max-w-md mx-auto">
+              <div className="w-16 h-16 rounded-2xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center mx-auto mb-4 shadow-sm">
+                <ShieldAlert size={32} />
+              </div>
+              <h2 className="text-xl font-black text-slate-900 mb-2">Access Restricted</h2>
+              <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+                Your role (<strong className="text-slate-900">{user?.roleLabel || user?.role || 'Staff Member'}</strong>) does not have permission to view the <strong className="text-slate-900">{matchedRouteItem?.name || 'this module'}</strong> module.
+              </p>
+              <div className="flex items-center justify-center gap-3">
+                <NavLink
+                  to={allowedGroups[0]?.items[0]?.path || '/'}
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition"
+                >
+                  Go to Allowed Module
+                </NavLink>
+              </div>
+            </div>
+          ) : (
+            <Outlet />
+          )}
         </main>
 
         <footer className="px-6 py-4 border-t border-slate-200 text-center text-xs text-slate-400 bg-white">

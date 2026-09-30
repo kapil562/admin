@@ -2,16 +2,16 @@ import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, orderBy 
 import { univoDb } from '../config';
 
 export const PERMISSION_MODULES = [
-  { id: 'dashboard', label: 'Platform Dashboard', actions: ['view'] },
-  { id: 'marketing', label: 'Field Marketing & GPS Visits', actions: ['view', 'create', 'edit', 'delete'] },
-  { id: 'attendance', label: 'Work Attendance & Duty', actions: ['view', 'create', 'edit', 'delete'] },
-  { id: 'clients', label: 'Library Clients Directory', actions: ['view', 'create', 'edit', 'delete'] },
-  { id: 'finances', label: 'Company Finances & Expenses', actions: ['view', 'create', 'edit', 'delete'] },
-  { id: 'plans', label: 'Plans & Pricing Management', actions: ['view', 'create', 'edit', 'delete'] },
-  { id: 'coupons', label: 'Coupons & Promos Management', actions: ['view', 'create', 'edit', 'delete'] },
-  { id: 'queries', label: 'User Queries & Support', actions: ['view', 'edit'] },
-  { id: 'reports', label: 'Financial Reports & Ledger', actions: ['view'] },
-  { id: 'staff', label: 'Staff & Role Management', actions: ['view', 'create', 'edit', 'delete'] },
+  { id: 'dashboard', label: 'Platform Dashboard', category: 'Overview', actions: ['view'] },
+  { id: 'reports', label: 'Reports & Analytics', category: 'Overview', actions: ['view'] },
+  { id: 'marketing', label: 'Field Marketing & GPS Visits', category: 'Field & Marketing', actions: ['view', 'create', 'edit', 'delete'] },
+  { id: 'attendance', label: 'Work Attendance & Duty', category: 'Field & Marketing', actions: ['view', 'create', 'edit', 'delete'] },
+  { id: 'clients', label: 'Library Clients Directory', category: 'Clients & Support', actions: ['view', 'create', 'edit', 'delete'] },
+  { id: 'queries', label: 'User Queries & Support Tickets', category: 'Clients & Support', actions: ['view', 'edit'] },
+  { id: 'finances', label: 'Company Finances & Expenses', category: 'Finance & Settings', actions: ['view', 'create', 'edit', 'delete'] },
+  { id: 'plans', label: 'Plans & Pricing Management', category: 'Finance & Settings', actions: ['view', 'create', 'edit', 'delete'] },
+  { id: 'coupons', label: 'Coupons & Promos Management', category: 'Finance & Settings', actions: ['view', 'create', 'edit', 'delete'] },
+  { id: 'staff', label: 'Staff & Role Management', category: 'Finance & Settings', actions: ['view', 'create', 'edit', 'delete'] },
 ];
 
 export const ROLE_PRESETS = {
@@ -20,15 +20,31 @@ export const ROLE_PRESETS = {
     description: 'Supreme control. Full View, Create, Edit, and Delete access across all platform modules, settings, finances & staff.',
     permissions: {
       dashboard: { view: true },
+      reports: { view: true },
       marketing: { view: true, create: true, edit: true, delete: true },
       attendance: { view: true, create: true, edit: true, delete: true },
       clients: { view: true, create: true, edit: true, delete: true },
+      queries: { view: true, edit: true },
       finances: { view: true, create: true, edit: true, delete: true },
       plans: { view: true, create: true, edit: true, delete: true },
       coupons: { view: true, create: true, edit: true, delete: true },
-      queries: { view: true, edit: true },
-      reports: { view: true },
       staff: { view: true, create: true, edit: true, delete: true },
+    },
+  },
+  manager: {
+    label: '👔 Operations & Branch Manager',
+    description: 'Can manage client accounts, oversee marketing visits, view staff attendance, manage plans, and handle queries.',
+    permissions: {
+      dashboard: { view: true },
+      reports: { view: true },
+      marketing: { view: true, create: true, edit: true, delete: true },
+      attendance: { view: true, create: true, edit: true, delete: false },
+      clients: { view: true, create: true, edit: true, delete: false },
+      queries: { view: true, edit: true },
+      finances: { view: true, create: true, edit: false, delete: false },
+      plans: { view: true, create: false, edit: false, delete: false },
+      coupons: { view: true, create: true, edit: false, delete: false },
+      staff: { view: true, create: false, edit: false, delete: false },
     },
   },
   marketing: {
@@ -36,29 +52,15 @@ export const ROLE_PRESETS = {
     description: 'Can log on-site visits (Libraries/Gyms) with GPS, view leads, and punch daily attendance.',
     permissions: {
       dashboard: { view: true },
+      reports: { view: false },
       marketing: { view: true, create: true, edit: true, delete: false },
       attendance: { view: true, create: true, edit: false, delete: false },
       clients: { view: true, create: false, edit: false, delete: false },
+      queries: { view: false, edit: false },
       finances: { view: false, create: false, edit: false, delete: false },
       plans: { view: true, create: false, edit: false, delete: false },
-      queries: { view: false, edit: false },
-      reports: { view: false },
+      coupons: { view: false, create: false, edit: false, delete: false },
       staff: { view: false, create: false, edit: false, delete: false },
-    },
-  },
-  manager: {
-    label: '👔 Operations & Branch Manager',
-    description: 'Can manage client accounts, oversee marketing visits, view staff attendance, and handle queries.',
-    permissions: {
-      dashboard: { view: true },
-      marketing: { view: true, create: true, edit: true, delete: true },
-      attendance: { view: true, create: true, edit: true, delete: false },
-      clients: { view: true, create: true, edit: true, delete: false },
-      finances: { view: true, create: true, edit: false, delete: false },
-      plans: { view: true, create: false, edit: false, delete: false },
-      queries: { view: true, edit: true },
-      reports: { view: true },
-      staff: { view: true, create: false, edit: false, delete: false },
     },
   },
   support: {
@@ -66,13 +68,14 @@ export const ROLE_PRESETS = {
     description: 'Can answer user queries, manage support tickets, and check library client records.',
     permissions: {
       dashboard: { view: true },
+      reports: { view: false },
       marketing: { view: false, create: false, edit: false, delete: false },
       attendance: { view: true, create: true, edit: false, delete: false },
       clients: { view: true, create: false, edit: true, delete: false },
+      queries: { view: true, edit: true },
       finances: { view: false, create: false, edit: false, delete: false },
       plans: { view: true, create: false, edit: false, delete: false },
-      queries: { view: true, edit: true },
-      reports: { view: false },
+      coupons: { view: false, create: false, edit: false, delete: false },
       staff: { view: false, create: false, edit: false, delete: false },
     },
   },
@@ -110,19 +113,20 @@ export const getStaffUsers = async () => {
  * Add a new staff user
  */
 export const addStaffUser = async (staffData) => {
+  const isOwner = staffData.role === 'owner';
   const cleaned = {
-    name: staffData.name.trim(),
-    email: staffData.email.trim().toLowerCase(),
-    password: staffData.password.trim(),
-    phone: staffData.phone ? staffData.phone.trim() : '',
+    name: (staffData.name || '').trim(),
+    email: (staffData.email || '').trim().toLowerCase(),
+    password: (staffData.password || '').trim(),
+    phone: (staffData.phone || '').trim(),
     role: staffData.role || 'marketing',
-    roleLabel: staffData.roleLabel || ROLE_PRESETS[staffData.role]?.label || 'Staff Member',
+    roleLabel: staffData.roleLabel || ROLE_PRESETS[staffData.role]?.label || (isOwner ? '👑 Business Owner / Super Admin' : 'Staff Member'),
     status: staffData.status || 'active',
     compensation: {
       baseSalary: Number(staffData.compensation?.baseSalary) || 0,
       commissionPerDeal: Number(staffData.compensation?.commissionPerDeal) || 0,
-      monthlyTargetDeals: Number(staffData.compensation?.monthlyTargetDeals) || 10,
-      monthlyTargetVisits: Number(staffData.compensation?.monthlyTargetVisits) || 50,
+      dailyTargetVisits: isOwner ? 0 : Number(staffData.compensation?.dailyTargetVisits) || 0,
+      dailyTargetDeals: isOwner ? 0 : Number(staffData.compensation?.dailyTargetDeals) || 0,
     },
     permissions: staffData.permissions || ROLE_PRESETS[staffData.role]?.permissions || {},
     createdAt: new Date().toISOString(),
@@ -137,18 +141,47 @@ export const addStaffUser = async (staffData) => {
  */
 export const updateStaffUser = async (id, staffData) => {
   const ref = doc(univoDb, 'staff_users', id);
+  const isOwner = staffData.role === 'owner';
+  const dailyVisits = isOwner ? 0 : Number(staffData.compensation?.dailyTargetVisits) || 0;
+  const dailyDeals = isOwner ? 0 : Number(staffData.compensation?.dailyTargetDeals) || 0;
+
   const updatePayload = {
-    ...staffData,
+    name: (staffData.name || '').trim(),
+    email: (staffData.email || '').trim().toLowerCase(),
+    phone: (staffData.phone || '').trim(),
+    role: staffData.role || 'custom',
+    roleLabel: staffData.roleLabel || ROLE_PRESETS[staffData.role]?.label || (isOwner ? '👑 Business Owner / Super Admin' : 'Staff Member'),
+    status: staffData.status || 'active',
     compensation: {
       baseSalary: Number(staffData.compensation?.baseSalary) || 0,
       commissionPerDeal: Number(staffData.compensation?.commissionPerDeal) || 0,
-      monthlyTargetDeals: Number(staffData.compensation?.monthlyTargetDeals) || 10,
-      monthlyTargetVisits: Number(staffData.compensation?.monthlyTargetVisits) || 50,
+      dailyTargetVisits: dailyVisits,
+      dailyTargetDeals: dailyDeals,
     },
+    permissions: staffData.permissions || ROLE_PRESETS[staffData.role]?.permissions || {},
     updatedAt: new Date().toISOString(),
   };
+
+  // Only update password if an explicit new password is provided
+  if (staffData.password && String(staffData.password).trim().length > 0) {
+    updatePayload.password = String(staffData.password).trim();
+  }
+
   await updateDoc(ref, updatePayload);
   return { id, ...updatePayload };
+};
+
+/**
+ * Toggle staff active/inactive status quickly
+ */
+export const toggleStaffStatus = async (id, currentStatus) => {
+  const newStatus = currentStatus === 'active' ? 'inactive' : 'active';
+  const ref = doc(univoDb, 'staff_users', id);
+  await updateDoc(ref, {
+    status: newStatus,
+    updatedAt: new Date().toISOString(),
+  });
+  return newStatus;
 };
 
 /**
@@ -159,37 +192,53 @@ export const deleteStaffUser = async (id) => {
 };
 
 /**
- * Calculate staff performance, deal commissions, and monthly payroll
+ * Calculate staff performance, deal commissions, targets and monthly payroll
  */
 export const calculateStaffPayroll = (staff, visitsList = []) => {
-  const staffVisits = visitsList.filter(
-    (v) => v.staffId === staff.id || v.staffName?.toLowerCase() === staff.name?.toLowerCase()
+  const staffId = staff?.id || staff?.uid;
+  const staffName = (staff?.name || staff?.displayName || '').trim().toLowerCase();
+
+  const staffVisits = (visitsList || []).filter(
+    (v) => (staffId && v.staffId === staffId) || (staffName && v.staffName?.trim().toLowerCase() === staffName)
   );
 
-  const baseSalary = Number(staff.compensation?.baseSalary) || 0;
-  const commissionPerDeal = Number(staff.compensation?.commissionPerDeal) || 0;
-  const targetDeals = Number(staff.compensation?.monthlyTargetDeals) || 10;
-  const targetVisits = Number(staff.compensation?.monthlyTargetVisits) || 50;
+  const baseSalary = Number(staff?.compensation?.baseSalary) || 0;
+  const commissionPerDeal = Number(staff?.compensation?.commissionPerDeal) || 0;
 
   const dealsClosed = staffVisits.filter((v) => v.status === 'Deal Closed').length;
   const totalVisits = staffVisits.length;
   const demosGiven = staffVisits.filter((v) => v.demoGiven).length;
 
+  // Daily targets and achievements (today's live stats)
+  const todayStr = new Date().toISOString().split('T')[0];
+  const todayVisitsList = staffVisits.filter((v) => (v.createdAt || '').startsWith(todayStr));
+  const todayVisits = todayVisitsList.length;
+  const todayDeals = todayVisitsList.filter((v) => v.status === 'Deal Closed').length;
+
+  // Direct Daily Targets configured by Admin
+  const dailyTargetVisits = Number(staff?.compensation?.dailyTargetVisits) || 0;
+  const dailyTargetDeals = Number(staff?.compensation?.dailyTargetDeals) || 0;
+
+  const dailyVisitAchievement = dailyTargetVisits > 0 ? Math.min(100, Math.round((todayVisits / dailyTargetVisits) * 100)) : (todayVisits > 0 ? 100 : 0);
+  const dailyDealAchievement = dailyTargetDeals > 0 ? Math.min(100, Math.round((todayDeals / dailyTargetDeals) * 100)) : (todayDeals > 0 ? 100 : 0);
+
   const commissionEarned = dealsClosed * commissionPerDeal;
   const totalEstimatedPayout = baseSalary + commissionEarned;
-  const targetAchievement = targetDeals > 0 ? Math.min(100, Math.round((dealsClosed / targetDeals) * 100)) : 100;
 
   return {
     baseSalary,
     commissionPerDeal,
-    targetDeals,
-    targetVisits,
+    dailyTargetVisits,
+    dailyTargetDeals,
+    todayVisits,
+    todayDeals,
+    dailyVisitAchievement,
+    dailyDealAchievement,
     dealsClosed,
     totalVisits,
     demosGiven,
     commissionEarned,
     totalEstimatedPayout,
-    targetAchievement,
   };
 };
 

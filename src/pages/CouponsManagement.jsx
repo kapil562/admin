@@ -9,9 +9,11 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
 import { Ticket, Plus, Edit2, Trash2, Users, User, Hash, Search, Check } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useAuth } from '../context/AuthContext';
 
 export const CouponsManagement = () => {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingCoupon, setEditingCoupon] = useState(null);
   const [libSearch, setLibSearch] = useState('');
@@ -127,13 +129,15 @@ export const CouponsManagement = () => {
         subtitle="Manage discount codes, vouchers, and their usage limits"
         icon={Ticket}
         action={
-          <button
-            onClick={() => openModal()}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold transition shadow-xs cursor-pointer"
-          >
-            <Plus size={16} />
-            <span>Create Coupon</span>
-          </button>
+          hasPermission('coupons', 'create') && (
+            <button
+              onClick={() => openModal()}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold transition shadow-xs cursor-pointer"
+            >
+              <Plus size={16} />
+              <span>Create Coupon</span>
+            </button>
+          )
         }
       />
 
@@ -143,12 +147,14 @@ export const CouponsManagement = () => {
           title="No Coupons Found"
           description="Create your first promo code to boost sales."
           action={
-            <button
-              onClick={() => openModal()}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold transition shadow-xs cursor-pointer"
-            >
-              Create Coupon
-            </button>
+            hasPermission('coupons', 'create') && (
+              <button
+                onClick={() => openModal()}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold transition shadow-xs cursor-pointer"
+              >
+                Create Coupon
+              </button>
+            )
           }
         />
       ) : (
@@ -225,24 +231,28 @@ export const CouponsManagement = () => {
                 </div>
 
                 <div className="flex items-center justify-end gap-2 pt-5 mt-5 border-t border-slate-100">
-                  <button
-                    onClick={() => openModal(coupon)}
-                    className="p-2 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition cursor-pointer"
-                    title="Edit Coupon"
-                  >
-                    <Edit2 size={16} />
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (window.confirm(`Delete coupon "${coupon.code}"?`)) {
-                        deleteMutation.mutate(coupon.id);
-                      }
-                    }}
-                    className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                    title="Delete Coupon"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  {hasPermission('coupons', 'edit') && (
+                    <button
+                      onClick={() => openModal(coupon)}
+                      className="p-2 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition cursor-pointer"
+                      title="Edit Coupon"
+                    >
+                      <Edit2 size={16} />
+                    </button>
+                  )}
+                  {hasPermission('coupons', 'delete') && (
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`Delete coupon "${coupon.code}"?`)) {
+                          deleteMutation.mutate(coupon.id);
+                        }
+                      }}
+                      className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                      title="Delete Coupon"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  )}
                 </div>
               </div>
             );
