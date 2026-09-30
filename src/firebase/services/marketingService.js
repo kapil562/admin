@@ -105,6 +105,10 @@ export const logFieldVisit = async (visitData) => {
     placeRating: visitData.placeRating || null,
     placeLat: visitData.placeLat || null,
     placeLng: visitData.placeLng || null,
+    // Anti-Fraud: Morning Punch / Home location verification
+    morningLocation: visitData.morningLocation || null,
+    distanceFromMorningKm: visitData.distanceFromMorningKm != null ? Number(visitData.distanceFromMorningKm) : null,
+    isNearHome: Boolean(visitData.isNearHome),
     visitCount: Number(visitData.visitCount) || 1,
     visitHistory: Array.isArray(visitData.visitHistory) ? visitData.visitHistory : [],
     lastVisitedAt: visitData.lastVisitedAt || new Date().toISOString(),
@@ -153,6 +157,11 @@ export const updateFieldVisit = async (id, visitData) => {
   if (visitData.followUpType !== undefined) cleaned.followUpType = visitData.followUpType;
   if (visitData.nextActionItem !== undefined) cleaned.nextActionItem = visitData.nextActionItem;
   if (visitData.reminderNote !== undefined) cleaned.reminderNote = visitData.reminderNote.trim();
+  if (visitData.placeLat !== undefined) cleaned.placeLat = visitData.placeLat;
+  if (visitData.placeLng !== undefined) cleaned.placeLng = visitData.placeLng;
+  if (visitData.morningLocation !== undefined) cleaned.morningLocation = visitData.morningLocation;
+  if (visitData.distanceFromMorningKm !== undefined) cleaned.distanceFromMorningKm = visitData.distanceFromMorningKm != null ? Number(visitData.distanceFromMorningKm) : null;
+  if (visitData.isNearHome !== undefined) cleaned.isNearHome = Boolean(visitData.isNearHome);
   if (visitData.visitCount !== undefined) cleaned.visitCount = Number(visitData.visitCount);
   if (visitData.visitHistory !== undefined) cleaned.visitHistory = visitData.visitHistory;
   if (visitData.lastVisitedAt !== undefined) cleaned.lastVisitedAt = visitData.lastVisitedAt;

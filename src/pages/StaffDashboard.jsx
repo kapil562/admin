@@ -57,6 +57,7 @@ import {
   formatEntryTimestamp,
   evaluateSyncDelay,
   calculateStaffDailyDistanceKm,
+  calculateDistance,
 } from '../services/visitAuditHelper';
 
 const VISIT_STATUSES = ['Interested', 'Demo Given', 'Follow Up', 'Deal Closed', 'Not Interested'];
@@ -434,6 +435,34 @@ export const StaffDashboard = () => {
     (s) => s.id === myId || s.email?.toLowerCase() === user?.email?.toLowerCase()
   ) || user;
 
+  const todayStr = new Date().toISOString().split('T')[0];
+  const myTodayLog = attendanceLogs.find(
+    (l) => (l.staffId === myId || (l.staffName && l.staffName.toLowerCase() === myName)) && l.date === todayStr
+  );
+
+  // Morning punch-in location of the staff for anti-fraud detection
+  const morningPunchLoc = useMemo(() => {
+    if (!myTodayLog) return null;
+    if (myTodayLog.punches && Array.isArray(myTodayLog.punches)) {
+      const firstIn = myTodayLog.punches.find((p) => p.type === 'in' && p.location);
+      if (firstIn) return firstIn.location;
+    }
+    if (myTodayLog.punchIn?.location) return myTodayLog.punchIn.location;
+    return null;
+  }, [myTodayLog]);
+
+  // Live distance from morning punch / home
+  const morningDistanceMeters = useMemo(() => {
+    if (!gpsData || !morningPunchLoc) return null;
+    const dist = calculateDistance(gpsData, morningPunchLoc);
+    return dist !== null ? Math.round(dist * 1000) : null;
+  }, [gpsData, morningPunchLoc]);
+
+  const isGpsNearMorningStart = useMemo(() => {
+    if (morningDistanceMeters === null) return false;
+    return morningDistanceMeters < 250;
+  }, [morningDistanceMeters]);
+
   const handleVisitSubmit = (e) => {
     e.preventDefault();
     if (!form.businessName.trim()) {
@@ -447,6 +476,17 @@ export const StaffDashboard = () => {
 
     const checkInTime = (form.checkInTime && form.checkInTime.trim()) || liveTimeStr;
     const checkOutTime = (form.checkOutTime && form.checkOutTime.trim()) || liveOutStr;
+
+    let distanceFromMorningKm = null;
+    let isNearHome = false;
+
+    if (gpsData && morningPunchLoc) {
+      const dist = calculateDistance(gpsData, morningPunchLoc);
+      if (dist !== null) {
+        distanceFromMorningKm = dist;
+        isNearHome = dist < 0.25;
+      }
+    }
 
     if (revisitTarget) {
       // Archive previous visit state into visitHistory array
@@ -484,6 +524,9 @@ export const StaffDashboard = () => {
           visitHistory: updatedHistory,
           location: gpsData || revisitTarget.location || null,
           photoUrl: form.photoUrl || revisitTarget.photoUrl || '',
+          morningLocation: morningPunchLoc || revisitTarget.morningLocation || null,
+          distanceFromMorningKm: distanceFromMorningKm ?? revisitTarget.distanceFromMorningKm ?? null,
+          isNearHome,
           updatedAt: new Date().toISOString(),
         },
       });
@@ -496,6 +539,9 @@ export const StaffDashboard = () => {
         staffId: myId,
         staffName: user?.displayName || user?.name || 'Staff',
         location: gpsData,
+        morningLocation: morningPunchLoc || null,
+        distanceFromMorningKm,
+        isNearHome,
         visitCount: 1,
         visitHistory: [],
         lastVisitedAt: new Date().toISOString(),
@@ -512,11 +558,6 @@ export const StaffDashboard = () => {
   const payroll = calculateStaffPayroll(staffData, allVisits);
   const myVisits = allVisits.filter(
     (v) => v.staffId === myId || (v.staffName && v.staffName.toLowerCase() === myName)
-  );
-
-  const todayStr = new Date().toISOString().split('T')[0];
-  const myTodayLog = attendanceLogs.find(
-    (l) => (l.staffId === myId || (l.staffName && l.staffName.toLowerCase() === myName)) && l.date === todayStr
   );
 
   const todayDistanceKm = calculateStaffDailyDistanceKm(
@@ -1426,6 +1467,33 @@ export const StaffDashboard = () => {
               </label>
             </div>
           </div>
+
+          {/* Anti-Fraud Live Status: Warn if still at Home/Morning Start, or Celebrate Verified Movement */}
+          {gpsData && morningPunchLoc && (
+            isGpsNearMorningStart ? (
+              <div className="p-3 bg-rose-50 border-2 border-rose-300 rounded-xl text-xs space-y-1">
+                <div className="flex items-center gap-1.5 font-black text-rose-800">
+                  <ShieldAlert size={16} className="text-rose-600 shrink-0 animate-pulse" />
+                  <span>🚨 Warning: You are still at your Morning Start Location ({morningDistanceMeters}m away)</span>
+                </div>
+                <p className="text-rose-700 text-[11px] leading-relaxed">
+                  You are logging a visit without traveling from your morning punch-in location. This entry will be strictly flagged in the Boss Tracker as a <strong>Fake Visit (Did not leave home)</strong>!
+                </p>
+              </div>
+            ) : morningDistanceMeters >= 250 ? (
+              <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs flex items-center justify-between text-emerald-800">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck size={15} className="text-emerald-600 shrink-0" />
+                  <span className="font-bold">
+                    Verified Field Movement: {(morningDistanceMeters / 1000).toFixed(1)} KM traveled from morning start point
+                  </span>
+                </div>
+                <span className="text-[10px] bg-emerald-100/80 text-emerald-800 font-black px-2 py-0.5 rounded-full shrink-0">
+                  ✓ Validated On-Site
+                </span>
+              </div>
+            ) : null
+          )}
 
           {/* Active Verticals Selector (if more than 1 active) */}
           {activeVerticals.length > 1 && (

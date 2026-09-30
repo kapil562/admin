@@ -1,4 +1,5 @@
 import { calculateDistance, formatDistance } from './googleMapsService';
+export { calculateDistance, formatDistance };
 
 /**
  * Extract or compute duration in minutes spent on a visit
@@ -48,9 +49,10 @@ export const formatDurationMinutes = (minutes) => {
 };
 
 /**
- * Evaluates whether a visit was genuine, verified on-site, or suspected fake/remote
+ * Evaluates whether a visit was genuine, verified on-site, or suspected fake/remote.
+ * Includes anti-fraud check for staff submitting visits while still at morning Punch-In (Home) location.
  */
-export const evaluateVisitAuthenticity = (visit) => {
+export const evaluateVisitAuthenticity = (visit, morningPunchLocation = null) => {
   if (!visit) {
     return {
       level: 'unverified',
@@ -69,6 +71,41 @@ export const evaluateVisitAuthenticity = (visit) => {
   const accuracy = visit.location?.accuracy || 10;
   const duration = getVisitDurationMinutes(visit);
 
+  // 1. Home / Morning Location Fraud Check: Did staff even leave home?
+  const startLoc = morningPunchLocation || visit.morningLocation;
+  let distanceFromMorning = visit.distanceFromMorningKm != null ? visit.distanceFromMorningKm * 1000 : null;
+  let isNearHome = Boolean(visit.isNearHome);
+
+  if (hasGps && startLoc && startLoc.latitude && startLoc.longitude && distanceFromMorning == null) {
+    distanceFromMorning = calculateDistance(
+      Number(visit.location.latitude),
+      Number(visit.location.longitude),
+      Number(startLoc.latitude),
+      Number(startLoc.longitude)
+    );
+    if (distanceFromMorning < 250) {
+      isNearHome = true;
+    }
+  }
+
+  if (isNearHome || (distanceFromMorning != null && distanceFromMorning < 250)) {
+    return {
+      level: 'home_fake_alert',
+      statusText: '🚨 Fake: At Home (Did not leave)',
+      badgeClass: 'bg-rose-100 text-rose-900 border-rose-400 font-black',
+      pillClass: 'bg-rose-600 text-white font-black animate-pulse',
+      explanation: `Fake Entry Detected: Staff logged this visit while still at their morning Punch-In location (${Math.round(distanceFromMorning || 0)}m away). Banda ghar se nikla hi nahi!`,
+      isGenuine: false,
+      hasGps: true,
+      hasPhoto,
+      distanceToPlace: null,
+      distanceFromMorning: distanceFromMorning ? Number((distanceFromMorning / 1000).toFixed(2)) : 0,
+      accuracy,
+      duration,
+      isNearHome: true,
+    };
+  }
+
   let distanceToPlace = null;
   let isDistanceMismatch = false;
 
@@ -86,7 +123,7 @@ export const evaluateVisitAuthenticity = (visit) => {
     }
   }
 
-  // 1. Distance Mismatch Alert (Staff was far away from the library)
+  // 2. Distance Mismatch Alert (Staff was far away from the library)
   if (isDistanceMismatch) {
     return {
       level: 'distance_alert',
@@ -98,12 +135,14 @@ export const evaluateVisitAuthenticity = (visit) => {
       hasGps: true,
       hasPhoto,
       distanceToPlace,
+      distanceFromMorning: distanceFromMorning ? Number((distanceFromMorning / 1000).toFixed(2)) : null,
       accuracy,
       duration,
+      isNearHome: false,
     };
   }
 
-  // 2. High Trust: GPS Verified AND Photo Proof attached
+  // 3. High Trust: GPS Verified AND Photo Proof attached
   if (hasGps && hasPhoto) {
     return {
       level: 'verified',
@@ -115,8 +154,10 @@ export const evaluateVisitAuthenticity = (visit) => {
       hasGps: true,
       hasPhoto: true,
       distanceToPlace,
+      distanceFromMorning: distanceFromMorning ? Number((distanceFromMorning / 1000).toFixed(2)) : null,
       accuracy,
       duration,
+      isNearHome: false,
     };
   }
 
@@ -258,16 +299,20 @@ export const buildStaffDailyTimeline = (staffId, staffName, dateStr, visits = []
   let missingGpsCount = 0;
   let missingPhotoCount = 0;
   let rapidVisitsCount = 0; // < 5 mins
+  let fakeHomeVisitsCount = 0;
+
+  const morningPunchLoc = attLog?.punchIn?.location || (punchEvents.length > 0 ? punchEvents[0].location : null);
 
   const visitItems = sortedVisits.map((visit, idx) => {
     const duration = getVisitDurationMinutes(visit);
     totalGroundMins += duration;
 
-    const auth = evaluateVisitAuthenticity(visit);
+    const auth = evaluateVisitAuthenticity(visit, morningPunchLoc);
     if (auth.isGenuine) verifiedCount++;
     if (!auth.hasGps) missingGpsCount++;
     if (!auth.hasPhoto) missingPhotoCount++;
     if (duration < 5) rapidVisitsCount++;
+    if (auth.level === 'home_fake_alert' || auth.isNearHome) fakeHomeVisitsCount++;
 
     const startTime = formatDisplayTime(visit.checkInTime, visit.createdAt);
     const calculatedOut = calculateCheckoutTime(visit.checkInTime || startTime, duration);
@@ -290,6 +335,8 @@ export const buildStaffDailyTimeline = (staffId, staffName, dateStr, visits = []
       location: visit.location || null,
       entryReceived,
       syncStatus,
+      distanceFromMorningKm: auth.distanceFromMorning != null ? auth.distanceFromMorning : (visit.distanceFromMorningKm != null ? visit.distanceFromMorningKm : null),
+      isNearHome: auth.isNearHome,
     };
   });
 
@@ -397,6 +444,7 @@ export const buildStaffDailyTimeline = (staffId, staffName, dateStr, visits = []
     missingGpsCount,
     missingPhotoCount,
     rapidVisitsCount,
+    fakeHomeVisitsCount,
     timelineItems,
     googleMapsRouteUrl,
     liveStatus,

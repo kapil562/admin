@@ -258,6 +258,7 @@ export const StaffAttendance = () => {
     const totalMissingPhotoOnDate = staffTimelines.reduce((sum, t) => sum + t.missingPhotoCount, 0);
     const totalRapidOnDate = staffTimelines.reduce((sum, t) => sum + t.rapidVisitsCount, 0);
     const totalDistanceKmOnDate = staffTimelines.reduce((sum, t) => sum + (t.totalDistanceKm || 0), 0);
+    const totalFakeHomeVisitsOnDate = staffTimelines.reduce((sum, t) => sum + (t.fakeHomeVisitsCount || 0), 0);
 
     const overallTrustScore = totalVisitsOnDate > 0
       ? Math.round((totalVerifiedOnDate / totalVisitsOnDate) * 100)
@@ -269,6 +270,7 @@ export const StaffAttendance = () => {
       totalGroundMins: totalGroundMinsOnDate,
       totalGroundFormatted: formatDurationMinutes(totalGroundMinsOnDate),
       totalDistanceKm: Number(totalDistanceKmOnDate.toFixed(1)),
+      fakeHomeVisitsCount: totalFakeHomeVisitsOnDate,
       overallTrustScore,
       missingGpsCount: totalMissingGpsOnDate,
       missingPhotoCount: totalMissingPhotoOnDate,
@@ -535,10 +537,10 @@ export const StaffAttendance = () => {
             />
             <StatCard
               title="Risk & Fraud Alerts"
-              value={bossTrackerData.missingGpsCount + bossTrackerData.missingPhotoCount + bossTrackerData.rapidVisitsCount}
-              subtitle={`${bossTrackerData.missingGpsCount} no GPS • ${bossTrackerData.missingPhotoCount} no photo • ${bossTrackerData.rapidVisitsCount} <5m`}
+              value={bossTrackerData.missingGpsCount + bossTrackerData.missingPhotoCount + bossTrackerData.rapidVisitsCount + (bossTrackerData.fakeHomeVisitsCount || 0)}
+              subtitle={`${bossTrackerData.fakeHomeVisitsCount ? `🚨 ${bossTrackerData.fakeHomeVisitsCount} fake from home • ` : ''}${bossTrackerData.missingGpsCount} no GPS • ${bossTrackerData.missingPhotoCount} no photo • ${bossTrackerData.rapidVisitsCount} <5m`}
               icon={AlertTriangle}
-              color={bossTrackerData.missingGpsCount > 0 ? 'rose' : 'neutral'}
+              color={(bossTrackerData.fakeHomeVisitsCount > 0 || bossTrackerData.missingGpsCount > 0) ? 'rose' : 'neutral'}
             />
           </div>
 
@@ -778,6 +780,7 @@ export const StaffAttendance = () => {
                                     <span
                                       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border shrink-0 ${item.auth.badgeClass}`}
                                     >
+                                      {item.auth.level === 'home_fake_alert' && <ShieldAlert size={13} className="text-rose-600 animate-pulse" />}
                                       {item.auth.level === 'verified' && <ShieldCheck size={13} className="text-emerald-600" />}
                                       {item.auth.level === 'distance_alert' && <AlertTriangle size={13} className="text-rose-600" />}
                                       {item.auth.level === 'gps_only' && <MapPin size={13} className="text-blue-600" />}
@@ -785,6 +788,21 @@ export const StaffAttendance = () => {
                                       <span>{item.auth.statusText}</span>
                                     </span>
                                   </div>
+
+                                  {/* Cheating / Home Fake Alert Banner */}
+                                  {(item.auth.level === 'home_fake_alert' || item.isNearHome) && (
+                                    <div className="bg-rose-50 border-2 border-rose-300 rounded-xl p-3 flex items-start gap-2.5 text-rose-900 shadow-xs">
+                                      <ShieldAlert size={18} className="text-rose-600 shrink-0 mt-0.5 animate-pulse" />
+                                      <div className="text-xs">
+                                        <div className="font-extrabold text-rose-800 uppercase tracking-wide">
+                                          🚨 Fake Visit Caught: Logged from Home / Morning Punch Location
+                                        </div>
+                                        <p className="text-rose-700 mt-0.5 leading-relaxed font-medium">
+                                          Device GPS confirms staff was at or within {item.distanceFromMorningKm != null ? `${Math.round(item.distanceFromMorningKm * 1000)}m` : '250m'} of their morning punch-in location when making this entry. Staff did not physically travel to this library!
+                                        </p>
+                                      </div>
+                                    </div>
+                                  )}
 
                                   {/* Place & Owner Details */}
                                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
@@ -844,6 +862,16 @@ export const StaffAttendance = () => {
                                           ❌ No Device GPS Recorded
                                         </span>
                                       )}
+
+                                      {item.isNearHome ? (
+                                        <span className="text-[11px] font-black text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md inline-flex items-center gap-1">
+                                          🚨 Still at Morning Start Point ({item.distanceFromMorningKm != null ? `${Math.round(item.distanceFromMorningKm * 1000)}m` : '<250m'})
+                                        </span>
+                                      ) : item.distanceFromMorningKm != null && item.distanceFromMorningKm > 0.25 ? (
+                                        <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md inline-flex items-center gap-1">
+                                          🚗 Traveled {item.distanceFromMorningKm} KM from start
+                                        </span>
+                                      ) : null}
 
                                       {item.auth.distanceToPlace != null && (
                                         <span
