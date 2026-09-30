@@ -401,68 +401,47 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
   const cleanQ = (query || '').trim();
   const isGym = cleanQ.toLowerCase().includes('gym') || cleanQ.toLowerCase().includes('fitness');
 
-  // Filter out irrelevant businesses (schools, colleges, tuitions, toys, restaurants, dairies, clothes, salons, clinics, etc.)
+  // Filter out irrelevant businesses (schools, dairies, hospitals, shops) by NAME, without rejecting libraries due to landmark addresses
   const isRelevantPlace = (p) => {
-    const name = (p.displayName?.text || p.displayName || p.name || '').toLowerCase();
-    const address = (p.formattedAddress || p.address || '').toLowerCase();
+    const name = (p.displayName?.text || p.displayName || p.name || '').toLowerCase().trim();
     const primaryType = (p.primaryType || '').toLowerCase();
     const types = Array.isArray(p.types) ? p.types.map((t) => String(t).toLowerCase()) : [];
-    const text = `${name} ${address} ${primaryType} ${types.join(' ')}`;
 
-    // Common non-target business types across all categories
-    const universalBadWords = [
-      'toy world', 'toy library', 'khilone', 'toys',
+    if (isGym) {
+      const gymKeywords = ['gym', 'fitness', 'workout', 'crossfit', 'bodybuilding', 'health club', 'iron temple', 'aerobics', 'zumba'];
+      const isGymMatch = primaryType.includes('gym') || types.some((t) => t.includes('gym') || t.includes('fitness')) || gymKeywords.some((w) => name.includes(w));
+      return isGymMatch;
+    }
+
+    // Library Search:
+    const hasLibraryKeyword = [
+      'library', 'pustakalaya', 'reading room', 'study point', 'self study', 
+      'study zone', 'study space', 'abhyasika', 'study circle', 'reading hall'
+    ].some((w) => name.includes(w));
+
+    // Reject non-library business types by NAME only (never check address landmarks like 'near hospital' or 'gurudwara road'!)
+    const badNameWords = [
+      'toy world', 'toy library', 'khilone',
       'restaurant', 'dairy', 'sweets', 'mithai', 'dhaba', 'hotel', 'cafe',
       'bhojnalaya', 'bakery', 'fast food', 'pizza', 'burger', 'tea stall', 'chai',
       'clothing', 'garment', 'textile', 'saree', 'footwear', 'shoe', 'fashion',
-      'electronics', 'hardware', 'saloon', 'beauty parlour', 'spa',
-      'pharmacy', 'medical store', 'chemist', 'hospital', 'pathology', 'diagnostic', 'dental', 'clinic',
-      'petrol pump', 'gas station', 'bank', 'atm', 'police station', 'post office',
-      'temple', 'mandir', 'masjid', 'mosque', 'church', 'gurudwara',
-      'real estate', 'property dealer', 'tour and travels'
+      'saloon', 'beauty parlour', 'spa',
+      'pharmacy', 'chemist', 'hospital', 'pathology', 'diagnostic', 'dental', 'clinic',
+      'petrol pump', 'gas station', 'bank', 'atm', 'police station',
+      'property dealer', 'tour and travels'
     ];
-    if (universalBadWords.some((w) => text.includes(w))) {
+    if (badNameWords.some((w) => name.includes(w)) && !hasLibraryKeyword) {
       return false;
     }
 
-    if (!isGym) {
-      // 1. Google Types check for School/University/Preschool
-      const academicGoogleTypes = [
-        'school', 'primary_school', 'secondary_school', 'high_school',
-        'university', 'preschool'
-      ];
-      const hasAcademicGoogleType = academicGoogleTypes.some((t) => primaryType === t || types.includes(t));
-
-      // 2. Name check for School, College, University, Coaching & Training institutes
-      const academicKeywords = [
-        'school', 'vidyalaya', 'vidhyalaya', 'vidya mandir', 'shiksha niketan',
-        'college', 'university', 'mahavidyalaya', 'vishwavidyalaya',
-        'public school', 'high school', 'senior secondary', 'convent',
-        'montessori', 'kindergarten', 'kanya pathshala', 'shishu mandir',
-        'coaching', 'tuition', 'tutor', 'classes',
-        'animation', 'training institute', 'computer institute', 'spoken english'
-      ];
-      const hasAcademicKeyword = academicKeywords.some((w) => name.includes(w));
-
-      if (hasAcademicGoogleType || hasAcademicKeyword) {
-        // EXCEPTION: Only allow if it's explicitly a dedicated self-study library / reading room despite an academic-sounding word
-        const isExplicitStudyLibrary = [
-          'study library', 'reading room', 'reading library', 'self study',
-          'study point', 'study zone', 'study space', 'study circle',
-          'abhyasika', 'digital library', 'study hall'
-        ].some((w) => name.includes(w));
-
-        if (!isExplicitStudyLibrary) {
-          return false; // Reject school / college / tuition
-        }
-      }
-    } else {
-      // Gym Search: Ensure it is a gym or fitness center
-      const gymKeywords = ['gym', 'fitness', 'workout', 'crossfit', 'bodybuilding', 'health club', 'iron temple', 'aerobics', 'zumba'];
-      const isGymMatch = primaryType.includes('gym') || types.some((t) => t.includes('gym') || t.includes('fitness')) || gymKeywords.some((w) => name.includes(w));
-      if (!isGymMatch) {
-        return false;
-      }
+    // Reject pure schools/colleges that don't have library in their name
+    const schoolWords = [
+      'public school', 'higher secondary', 'senior secondary', 'high school',
+      'convent school', 'montessori', 'vidyalaya', 'vidhyalaya', 'shiksha niketan',
+      'shishu mandir', 'kanya pathshala'
+    ];
+    if (schoolWords.some((w) => name.includes(w)) && !hasLibraryKeyword) {
+      return false;
     }
 
     return true;
