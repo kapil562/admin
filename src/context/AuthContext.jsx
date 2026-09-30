@@ -181,7 +181,7 @@ export const AuthProvider = ({ children }) => {
     }
 
     throw new Error(
-      'Login failed: User ID ya Password match nahi hua (agar aapne Staff ID delete ki thi toh wo remove ho chuki hai). Kripya Admin login use karein ya Quick Admin Access click karein.'
+      'Login failed: User ID or Password does not match. Please verify your credentials or click Quick Admin Access.'
     );
   };
 

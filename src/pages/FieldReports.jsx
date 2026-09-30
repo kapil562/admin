@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getFieldVisits } from '../firebase/services/marketingService';
+import { Link } from 'react-router-dom';
+import { getFieldVisits, getAttendanceLogs } from '../firebase/services/marketingService';
 import { getStaffUsers, calculateStaffPayroll } from '../firebase/services/staffService';
 import { useAuth } from '../context/AuthContext';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -10,6 +11,14 @@ import { Modal } from '../components/ui/Modal';
 import { EmptyState } from '../components/ui/EmptyState';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
 import { SearchBar } from '../components/ui/SearchBar';
+import {
+  evaluateVisitAuthenticity,
+  getVisitDurationMinutes,
+  formatDurationMinutes,
+  formatDisplayTime,
+  formatEntryTimestamp,
+  evaluateSyncDelay,
+} from '../services/visitAuditHelper';
 import {
   ClipboardList,
   MapPin,
@@ -33,13 +42,28 @@ import {
   ChevronRight,
   TrendingUp,
   Crown,
+  ShieldCheck,
+  ShieldAlert,
+  Layers,
+  ArrowRight,
+  CalendarDays,
+  Target,
+  BarChart3,
+  PhoneCall,
+  BellRing,
+  Send,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { getCompetitorExpiringLeads } from '../services/salesBoosterHelper';
 
 export const FieldReports = () => {
   const { user } = useAuth();
   const isSuperAdmin = !user?.role || user.role === 'super_admin' || user.role === 'owner';
 
+  // Active Tab: 'daily_analytics' | 'pipeline_competitor' | 'audit_log'
+  const [activeTab, setActiveTab] = useState('daily_analytics');
+
+  // Filters for Audit Log & Reports
   const [dateRange, setDateRange] = useState('all'); // all, today, yesterday, week, month, custom
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
@@ -59,6 +83,12 @@ export const FieldReports = () => {
   const { data: staffList = [], isLoading: loadingStaff } = useQuery({
     queryKey: ['admin_staff_users'],
     queryFn: getStaffUsers,
+  });
+
+  // 3. Fetch Attendance Logs
+  const { data: attendanceLogs = [], isLoading: loadingAtt } = useQuery({
+    queryKey: ['admin_attendance_logs'],
+    queryFn: getAttendanceLogs,
   });
 
   // ── Date Formatting Helpers ────────────────────────────────────────────────
@@ -103,7 +133,6 @@ export const FieldReports = () => {
       }
     });
 
-    // Also ensure currently logged-in Admin is included if isSuperAdmin
     if (isSuperAdmin && user) {
       const myName = (user.displayName || user.name || 'Administrator').trim();
       const myId = user.uid || user.id || 'admin';
@@ -188,11 +217,18 @@ export const FieldReports = () => {
     });
   }, [visits, isSuperAdmin, selectedStaff, statusFilter, dateRange, customStartDate, customEndDate, search, user, allStaffAndAdmins]);
 
-  // ── High-Level Report Statistics ───────────────────────────────────────────
+  // ── High-Level Overall Statistics ──────────────────────────────────────────
   const reportStats = useMemo(() => {
     const totalVisits = filteredVisits.length;
-    const todayStr = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
+    const weekAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).toISOString();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+
     const todayVisits = filteredVisits.filter((v) => (v.createdAt || '').startsWith(todayStr)).length;
+    const weekVisits = filteredVisits.filter((v) => (v.createdAt || '') >= weekAgo).length;
+    const monthVisits = filteredVisits.filter((v) => (v.createdAt || '') >= monthStart).length;
+
     const dealsClosed = filteredVisits.filter((v) => v.status === 'Deal Closed').length;
     const demosGiven = filteredVisits.filter((v) => v.demoGiven).length;
     const followUps = filteredVisits.filter((v) => v.status === 'Follow Up').length;
@@ -202,9 +238,13 @@ export const FieldReports = () => {
     // Distinct staff active in filtered set
     const activeStaffSet = new Set(filteredVisits.map((v) => v.staffName || v.staffId).filter(Boolean));
 
+    const totalGroundMins = filteredVisits.reduce((acc, v) => acc + getVisitDurationMinutes(v), 0);
+
     return {
       totalVisits,
       todayVisits,
+      weekVisits,
+      monthVisits,
       dealsClosed,
       demosGiven,
       followUps,
@@ -214,16 +254,87 @@ export const FieldReports = () => {
       photoRate: totalVisits ? Math.round((withPhoto / totalVisits) * 100) : 0,
       activeStaffCount: activeStaffSet.size,
       conversionRate: totalVisits ? Math.round((dealsClosed / totalVisits) * 100) : 0,
+      totalGroundMins,
+      totalGroundFormatted: formatDurationMinutes(totalGroundMins),
     };
   }, [filteredVisits]);
 
-  // ── Staff Breakdown (Kisne kitni entry kari aur kab) ──────────────────────
+  // ── DAILY BREAKDOWN: Daily Visits Trend & Operations Report ───────
+  const dailyBreakdown = useMemo(() => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+    const map = new Map();
+
+    visits.forEach((v) => {
+      const dateStr = (v.createdAt || '').substring(0, 10) || todayStr;
+      if (!map.has(dateStr)) {
+        map.set(dateStr, {
+          date: dateStr,
+          totalVisits: 0,
+          staffMap: new Map(), // staffName -> count
+          demos: 0,
+          deals: 0,
+          followUps: 0,
+          withGps: 0,
+          withPhoto: 0,
+          totalDurationMins: 0,
+          visits: [],
+        });
+      }
+
+      const d = map.get(dateStr);
+      d.totalVisits += 1;
+      const sName = v.staffName || 'Staff Rep';
+      d.staffMap.set(sName, (d.staffMap.get(sName) || 0) + 1);
+
+      if (v.demoGiven) d.demos += 1;
+      if (v.status === 'Deal Closed') d.deals += 1;
+      if (v.status === 'Follow Up') d.followUps += 1;
+      if (v.location?.latitude) d.withGps += 1;
+      if (v.photoUrl) d.withPhoto += 1;
+      d.totalDurationMins += getVisitDurationMinutes(v);
+      d.visits.push(v);
+    });
+
+    const list = Array.from(map.values())
+      .map((d) => {
+        let label = d.date;
+        try {
+          const dt = new Date(d.date + 'T00:00:00');
+          const dayName = dt.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
+          if (d.date === todayStr) label = `Today, ${dayName}`;
+          else if (d.date === yesterdayStr) label = `Yesterday, ${dayName}`;
+          else label = dayName;
+        } catch {}
+
+        const staffArray = Array.from(d.staffMap.entries())
+          .map(([name, count]) => ({ name, count }))
+          .sort((a, b) => b.count - a.count);
+
+        return {
+          ...d,
+          displayDate: label,
+          isToday: d.date === todayStr,
+          isYesterday: d.date === yesterdayStr,
+          staffArray,
+          gpsRate: d.totalVisits ? Math.round((d.withGps / d.totalVisits) * 100) : 0,
+          formattedGroundTime: formatDurationMinutes(d.totalDurationMins),
+        };
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    return list;
+  }, [visits]);
+
+  // ── Staff Breakdown (Visits logged by staff member) ──────────────────────
   const staffBreakdown = useMemo(() => {
     const todayStr = new Date().toISOString().split('T')[0];
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
 
-    // Map all registered staff + Admin / Owner + any unregistered staff found in visits
     const staffMap = new Map();
 
     allStaffAndAdmins.forEach((s) => {
@@ -244,14 +355,13 @@ export const FieldReports = () => {
         deals: 0,
         photos: 0,
         gpsCount: 0,
+        totalGroundMins: 0,
         lastVisit: null,
-        payroll: calculateStaffPayroll(s, visits),
       });
     });
 
     visits.forEach((v) => {
       let key = v.staffId;
-      // Match by name if staffId not matched
       if (!staffMap.has(key)) {
         const found = allStaffAndAdmins.find(
           (s) => (s.name || '').toLowerCase() === (v.staffName || '').toLowerCase()
@@ -259,7 +369,6 @@ export const FieldReports = () => {
         if (found) {
           key = found.id;
         } else {
-          // Unregistered staff record
           const unregKey = `unreg_${v.staffName || 'Unknown'}`;
           if (!staffMap.has(unregKey)) {
             const isAdm =
@@ -282,8 +391,8 @@ export const FieldReports = () => {
               deals: 0,
               photos: 0,
               gpsCount: 0,
+              totalGroundMins: 0,
               lastVisit: null,
-              payroll: { baseSalary: 0, commissionEarned: 0, dealsClosed: 0 },
             });
           }
           key = unregKey;
@@ -300,6 +409,7 @@ export const FieldReports = () => {
         if (v.status === 'Deal Closed') entry.deals += 1;
         if (v.photoUrl) entry.photos += 1;
         if (v.location?.latitude) entry.gpsCount += 1;
+        entry.totalGroundMins += getVisitDurationMinutes(v);
 
         if (!entry.lastVisit || new Date(v.createdAt) > new Date(entry.lastVisit.createdAt)) {
           entry.lastVisit = v;
@@ -316,6 +426,53 @@ export const FieldReports = () => {
       return a.name.localeCompare(b.name);
     });
   }, [allStaffAndAdmins, visits]);
+
+  // ── Pipeline & Competitor Analytics ───────────────────────────────────────
+  const pipelineStats = useMemo(() => {
+    const statusCounts = {
+      'Interested': 0,
+      'Demo Given': 0,
+      'Follow Up': 0,
+      'Deal Closed': 0,
+      'Not Interested': 0,
+    };
+
+    const competitorCounts = {};
+    const softwareTypeCounts = {
+      'Manual Register': 0,
+      'Competitor Software': 0,
+      'Excel / Sheets': 0,
+      'No System': 0,
+      'Other': 0,
+    };
+
+    visits.forEach((v) => {
+      if (statusCounts[v.status] !== undefined) {
+        statusCounts[v.status] += 1;
+      }
+      if (v.competitorName) {
+        const cName = v.competitorName.trim();
+        competitorCounts[cName] = (competitorCounts[cName] || 0) + 1;
+      }
+      const st = v.currentSoftwareType || 'Manual Register';
+      if (softwareTypeCounts[st] !== undefined) {
+        softwareTypeCounts[st] += 1;
+      } else {
+        softwareTypeCounts['Other'] += 1;
+      }
+    });
+
+    return {
+      statusCounts,
+      competitorCounts: Object.entries(competitorCounts).sort((a, b) => b[1] - a[1]),
+      softwareTypeCounts,
+    };
+  }, [visits]);
+
+  // ── Competitor Expiring Radar ─────────────────────────────────────────────
+  const expiringCompetitors = useMemo(() => {
+    return getCompetitorExpiringLeads(visits, 35);
+  }, [visits]);
 
   // ── CSV Export Function ────────────────────────────────────────────────────
   const handleExportCSV = () => {
@@ -340,6 +497,7 @@ export const FieldReports = () => {
       'Priority',
       'Live Demo Given',
       'Current Software',
+      'Competitor Name',
       'Follow-Up Date',
       'Follow-Up Time',
       'Next Agenda',
@@ -368,6 +526,7 @@ export const FieldReports = () => {
         `"${v.leadPriority || ''}"`,
         `"${v.demoGiven ? 'Yes' : 'No'}"`,
         `"${v.currentSoftwareType || ''}"`,
+        `"${v.competitorName || ''}"`,
         `"${v.followUpDate || ''}"`,
         `"${v.followUpTime || ''}"`,
         `"${(v.nextActionItem || '').replace(/"/g, '""')}"`,
@@ -407,697 +566,1100 @@ export const FieldReports = () => {
     }
   };
 
-  if (loadingVisits || loadingStaff) {
-    return <LoadingSpinner fullScreen label="Compiling Field Marketing Reports..." />;
+  if (loadingVisits || loadingStaff || loadingAtt) {
+    return <LoadingSpinner fullScreen label="Compiling Field Sales & Marketing Reports..." />;
   }
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Field Sales & Visits Reports"
-        subtitle="Complete on-ground tracking: kisne entry kari, kitni visits kari, exact date-time, GPS verification aur daily logs."
+        subtitle="Executive Dashboard: Daily visit metrics, staff productivity, lead conversion pipeline, and on-ground client intelligence."
         action={
           <div className="flex items-center gap-2">
+            <Link
+              to="/attendance"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition cursor-pointer shadow-xs"
+              title="View Staff Duty & Hours Tracking"
+            >
+              <ShieldCheck size={14} className="text-emerald-400" />
+              <span>Staff Duty & Hours</span>
+            </Link>
+
             <button
               onClick={handleExportCSV}
-              className="inline-flex items-center gap-2 px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-xs transition cursor-pointer"
             >
               <Download size={15} />
-              <span>Export Report (CSV)</span>
+              <span>Export CSV</span>
             </button>
           </div>
         }
       />
 
-      {/* ═══ Top Key KPI Stat Cards ═══ */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          title="Total Field Visits"
-          value={reportStats.totalVisits}
-          subtitle={`${reportStats.todayVisits} logged today`}
-          icon={Building2}
-          color="blue"
-        />
-        <StatCard
-          title="Active Field Reps"
-          value={reportStats.activeStaffCount}
-          subtitle="Staff logging on-site visits"
-          icon={Users}
-          color="indigo"
-        />
-        <StatCard
-          title="GPS Verification Rate"
-          value={`${reportStats.gpsRate}%`}
-          subtitle={`${reportStats.withGps} visits GPS locked`}
-          icon={MapPin}
-          color="emerald"
-        />
-        <StatCard
-          title="Deals Won / Closed"
-          value={reportStats.dealsClosed}
-          subtitle={`${reportStats.conversionRate}% overall conversion`}
-          icon={CheckCircle2}
-          color="amber"
-          trend={`${reportStats.demosGiven} Demos Given`}
-          trendPositive={true}
-        />
+      {/* ═══ View Mode Tabs ═══ */}
+      <div className="flex items-center gap-2 p-1.5 bg-slate-100/90 rounded-2xl border border-slate-200/80 w-full sm:w-fit overflow-x-auto shadow-2xs">
+        <button
+          onClick={() => setActiveTab('daily_analytics')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer whitespace-nowrap ${
+            activeTab === 'daily_analytics'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+          }`}
+        >
+          <CalendarDays size={16} />
+          <span>📊 Daily Activity & Staff Performance</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('pipeline_competitor')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer whitespace-nowrap ${
+            activeTab === 'pipeline_competitor'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+          }`}
+        >
+          <Target size={16} />
+          <span>🎯 Lead Pipeline & Competitor Analysis</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('audit_log')}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer whitespace-nowrap ${
+            activeTab === 'audit_log'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+          }`}
+        >
+          <ClipboardList size={16} />
+          <span>📋 All Field Visits Audit Log</span>
+        </button>
       </div>
 
-      {/* ═══ SECTION 1: Staff-wise Performance Leaderboard ═══ */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-        <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
-              <Users size={18} />
-            </div>
-            <div>
-              <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">
-                Staff-Wise Performance & Entry Summary
-              </h3>
-              <p className="text-[11px] text-slate-500">
-                Pata chale kis staff ne kitni visits kari hain, kab last active tha, aur kitne deals close kiye
-              </p>
-            </div>
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {/* ═══ TAB 1: DAILY ACTIVITY & STAFF WORK REPORTS ═══                    */}
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'daily_analytics' && (
+        <div className="space-y-6">
+          {/* Top Key KPI Stat Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatCard
+              title="Total Field Visits"
+              value={reportStats.totalVisits}
+              subtitle={`${reportStats.todayVisits} today • ${reportStats.weekVisits} this week`}
+              icon={Building2}
+              color="blue"
+            />
+            <StatCard
+              title="Deals Won / Closed"
+              value={reportStats.dealsClosed}
+              subtitle={`${reportStats.conversionRate}% overall conversion rate`}
+              icon={CheckCircle2}
+              color="emerald"
+              trend={`${reportStats.demosGiven} Demos Given`}
+              trendPositive={true}
+            />
+            <StatCard
+              title="Active Field Reps"
+              value={reportStats.activeStaffCount}
+              subtitle="Staff & Admins logging visits"
+              icon={Users}
+              color="indigo"
+            />
+            <StatCard
+              title="Ground Time with Clients"
+              value={reportStats.totalGroundFormatted}
+              subtitle={`${reportStats.gpsRate}% Verified with Device GPS`}
+              icon={Clock}
+              color="amber"
+            />
           </div>
-          {selectedStaff !== 'All' && (
-            <button
-              onClick={() => setSelectedStaff('All')}
-              className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-lg transition self-start sm:self-auto cursor-pointer"
-            >
-              Showing: {staffBreakdown.find((s) => s.id === selectedStaff)?.name || selectedStaff} (Clear Filter)
-            </button>
-          )}
-        </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50/75 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
-                <th className="px-5 py-3.5">Staff Rep</th>
-                <th className="px-4 py-3.5 text-center">Total Visits</th>
-                <th className="px-4 py-3.5 text-center">Today</th>
-                <th className="px-4 py-3.5 text-center">This Week</th>
-                <th className="px-4 py-3.5 text-center">This Month</th>
-                <th className="px-4 py-3.5 text-center">Deals Won</th>
-                <th className="px-4 py-3.5 text-center">GPS %</th>
-                <th className="px-4 py-3.5 text-center">Photos</th>
-                <th className="px-5 py-3.5">Last Visit Entry Logged</th>
-                <th className="px-4 py-3.5 text-right">Filter</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-xs">
-              {staffBreakdown.length > 0 ? (
-                staffBreakdown.map((s) => {
-                  const isSelected = selectedStaff === s.id;
-                  const gpsRate = s.totalVisits ? Math.round((s.gpsCount / s.totalVisits) * 100) : 0;
-                  const lastDt = s.lastVisit ? formatDateTime(s.lastVisit.createdAt) : null;
+          {/* ═══ SUB-SECTION 1: DAY-BY-DAY VISITS BREAKDOWN ═══ */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+            <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+                  <CalendarDays size={20} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">
+                    📅 Daily Visits Trend & Operational Activity Report
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Day-by-day audit: Total visits logged, active staff members, demos given, and closed deals
+                  </p>
+                </div>
+              </div>
+              <span className="text-xs font-bold text-slate-500 bg-slate-100 px-3 py-1 rounded-lg">
+                Last {dailyBreakdown.length} Active Days Tracked
+              </span>
+            </div>
 
-                  return (
-                    <tr
-                      key={s.id}
-                      className={`hover:bg-slate-50/80 transition ${isSelected ? 'bg-blue-50/50' : ''}`}
-                    >
-                      <td className="px-5 py-3.5 font-medium">
-                        <div className="flex items-center gap-3">
-                          <div
-                            className={`w-8 h-8 rounded-xl font-extrabold text-xs flex items-center justify-center shrink-0 shadow-2xs ${
-                              s.isAdmin
-                                ? 'bg-gradient-to-tr from-amber-600 to-yellow-500 text-white border border-amber-300'
-                                : 'bg-gradient-to-tr from-slate-800 to-blue-700 text-white'
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50/75 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                    <th className="px-5 py-3.5">Date</th>
+                    <th className="px-4 py-3.5 text-center">Visits Logged</th>
+                    <th className="px-5 py-3.5">Staff Active on Field (Visits by Staff)</th>
+                    <th className="px-4 py-3.5 text-center">Demos Given</th>
+                    <th className="px-4 py-3.5 text-center">Deals Won</th>
+                    <th className="px-4 py-3.5 text-center">Ground Time</th>
+                    <th className="px-4 py-3.5 text-center">GPS Rate</th>
+                    <th className="px-4 py-3.5 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {dailyBreakdown.length > 0 ? (
+                    dailyBreakdown.slice(0, 15).map((day) => (
+                      <tr key={day.date} className="hover:bg-slate-50/80 transition">
+                        {/* Date Column */}
+                        <td className="px-5 py-4 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <span className="font-extrabold text-slate-900 text-xs sm:text-sm">
+                              {day.displayDate}
+                            </span>
+                            {day.isToday && (
+                              <span className="text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-300 px-2 py-0.5 rounded-full">
+                                Today
+                              </span>
+                            )}
+                            {day.isYesterday && (
+                              <span className="text-[10px] font-bold bg-slate-200 text-slate-700 px-2 py-0.5 rounded-full">
+                                Yesterday
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[10px] text-slate-400 block mt-0.5">{day.date}</span>
+                        </td>
+
+                        {/* Total Visits Count */}
+                        <td className="px-4 py-4 text-center">
+                          <span className="inline-flex items-center justify-center min-w-8 h-8 px-2.5 rounded-xl font-black text-sm bg-blue-50 text-blue-700 border border-blue-200">
+                            {day.totalVisits}
+                          </span>
+                        </td>
+
+                        {/* Staff Active & Counts */}
+                        <td className="px-5 py-4">
+                          <div className="flex items-center gap-1.5 flex-wrap max-w-md">
+                            {day.staffArray.map((s, idx) => (
+                              <span
+                                key={idx}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-slate-100 text-slate-800 border border-slate-200"
+                              >
+                                <span>{s.name}</span>
+                                <strong className="text-blue-600 bg-white px-1.5 py-0.2 rounded-md shadow-2xs">
+                                  {s.count}
+                                </strong>
+                              </span>
+                            ))}
+                          </div>
+                        </td>
+
+                        {/* Demos */}
+                        <td className="px-4 py-4 text-center">
+                          <span className={`font-bold ${day.demos > 0 ? 'text-indigo-600 font-extrabold' : 'text-slate-400'}`}>
+                            {day.demos > 0 ? `💻 ${day.demos}` : '-'}
+                          </span>
+                        </td>
+
+                        {/* Deals Won */}
+                        <td className="px-4 py-4 text-center">
+                          <span className={`font-black ${day.deals > 0 ? 'text-emerald-700' : 'text-slate-400'}`}>
+                            {day.deals > 0 ? `🎉 ${day.deals}` : '-'}
+                          </span>
+                        </td>
+
+                        {/* Ground Time */}
+                        <td className="px-4 py-4 text-center whitespace-nowrap">
+                          <span className="font-extrabold text-blue-700 text-xs">
+                            ⏱️ {day.formattedGroundTime}
+                          </span>
+                        </td>
+
+                        {/* GPS Rate */}
+                        <td className="px-4 py-4 text-center">
+                          <span
+                            className={`font-bold text-[11px] px-2 py-0.5 rounded-md ${
+                              day.gpsRate >= 80
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-amber-50 text-amber-700 border border-amber-200'
                             }`}
                           >
-                            {s.isAdmin ? <Crown size={15} /> : s.name.substring(0, 2).toUpperCase()}
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-bold text-slate-900 block">{s.name}</span>
-                              {s.isAdmin && (
-                                <span className="text-[9px] font-black uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300 px-1 py-0.2 rounded">
-                                  Owner / Admin
-                                </span>
-                              )}
-                            </div>
-                            <span className="text-[10px] text-slate-400 block">{s.roleLabel}</span>
-                          </div>
-                        </div>
-                      </td>
+                            {day.gpsRate}%
+                          </span>
+                        </td>
 
-                      <td className="px-4 py-3.5 text-center">
-                        <span className="font-black text-slate-900 text-sm">{s.totalVisits}</span>
-                      </td>
-
-                      <td className="px-4 py-3.5 text-center">
-                        <span className={`px-2 py-0.5 rounded-full font-bold text-xs ${s.todayVisits > 0 ? 'bg-emerald-100 text-emerald-800' : 'text-slate-400'}`}>
-                          {s.todayVisits}
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-3.5 text-center font-bold text-slate-700">
-                        {s.weekVisits}
-                      </td>
-
-                      <td className="px-4 py-3.5 text-center font-bold text-slate-700">
-                        {s.monthVisits}
-                      </td>
-
-                      <td className="px-4 py-3.5 text-center">
-                        <span className={`font-black ${s.deals > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
-                          {s.deals > 0 ? `🎉 ${s.deals}` : '0'}
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-3.5 text-center">
-                        <span className={`font-bold text-[11px] ${gpsRate >= 80 ? 'text-emerald-700' : gpsRate >= 50 ? 'text-amber-700' : 'text-slate-400'}`}>
-                          {gpsRate}%
-                        </span>
-                      </td>
-
-                      <td className="px-4 py-3.5 text-center font-medium text-slate-600">
-                        {s.photos} 📷
-                      </td>
-
-                      <td className="px-5 py-3.5 text-slate-600">
-                        {lastDt ? (
-                          <div>
-                            <p className="font-bold text-slate-800 text-[11px] truncate max-w-[180px]">
-                              {s.lastVisit.businessName}
-                            </p>
-                            <p className="text-[10px] text-slate-400">
-                              {lastDt.date} at {lastDt.time}
-                            </p>
-                          </div>
-                        ) : (
-                          <span className="text-slate-400 italic text-[11px]">No visits yet</span>
-                        )}
-                      </td>
-
-                      <td className="px-4 py-3.5 text-right">
-                        <button
-                          onClick={() => setSelectedStaff(isSelected ? 'All' : s.id)}
-                          className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer border ${
-                            isSelected
-                              ? 'bg-blue-600 text-white border-blue-600'
-                              : 'bg-white text-slate-700 border-slate-200 hover:bg-blue-50 hover:text-blue-700'
-                          }`}
-                        >
-                          {isSelected ? 'Selected' : 'View Logs'}
-                        </button>
+                        {/* Action: Quick Filter */}
+                        <td className="px-4 py-4 text-right whitespace-nowrap">
+                          <button
+                            onClick={() => {
+                              setDateRange('custom');
+                              setCustomStartDate(day.date);
+                              setCustomEndDate(day.date);
+                              setActiveTab('audit_log');
+                            }}
+                            className="px-3 py-1.5 bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 text-xs font-bold rounded-lg transition inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <span>View All {day.totalVisits}</span>
+                            <ArrowRight size={12} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={8} className="p-8 text-center text-slate-400">
+                        No field visits recorded yet.
                       </td>
                     </tr>
-                  );
-                })
-              ) : (
-                <tr>
-                  <td colSpan={10} className="p-8 text-center text-slate-400">
-                    No staff records found.
-                  </td>
-                </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* ═══ SUB-SECTION 2: STAFF PERFORMANCE LEADERBOARD ═══ */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+            <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
+                  <Award size={20} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">
+                    🏆 Staff Performance & Entry Breakdown Leaderboard
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Track visit volumes, demos given, deals closed, GPS verification rate, and on-site duration
+                  </p>
+                </div>
+              </div>
+              {selectedStaff !== 'All' && (
+                <button
+                  onClick={() => setSelectedStaff('All')}
+                  className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-lg transition self-start sm:self-auto cursor-pointer"
+                >
+                  Filtered: {staffBreakdown.find((s) => s.id === selectedStaff)?.name || selectedStaff} (Clear)
+                </button>
               )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+            </div>
 
-      {/* ═══ SECTION 2: Comprehensive Visits Audit Log & Timeline ═══ */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden space-y-4 p-5">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
-              <ClipboardList size={18} className="text-blue-600" />
-              <span>Full Field Visits Activity Log ({filteredVisits.length} Records)</span>
-            </h3>
-            <p className="text-[11px] text-slate-500 mt-0.5">
-              Kab kis library me visit hui, kis staff ne ki, exact date-time, GPS coordinates, aur meeting discussion
-            </p>
-          </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50/75 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                    <th className="px-5 py-3.5">Staff Rep</th>
+                    <th className="px-4 py-3.5 text-center">Total Visits</th>
+                    <th className="px-4 py-3.5 text-center">Today</th>
+                    <th className="px-4 py-3.5 text-center">This Week</th>
+                    <th className="px-4 py-3.5 text-center">This Month</th>
+                    <th className="px-4 py-3.5 text-center">Demos</th>
+                    <th className="px-4 py-3.5 text-center">Deals Won</th>
+                    <th className="px-4 py-3.5 text-center">Ground Time</th>
+                    <th className="px-4 py-3.5 text-center">GPS %</th>
+                    <th className="px-5 py-3.5">Last Visit Entry Logged</th>
+                    <th className="px-4 py-3.5 text-right">Filter</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {staffBreakdown.length > 0 ? (
+                    staffBreakdown.map((s) => {
+                      const isSelected = selectedStaff === s.id;
+                      const gpsRate = s.totalVisits ? Math.round((s.gpsCount / s.totalVisits) * 100) : 0;
+                      const lastDt = s.lastVisit ? formatDateTime(s.lastVisit.createdAt) : null;
 
-          {/* Quick Date Range Filters */}
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {[
-              { id: 'all', label: 'All Time' },
-              { id: 'today', label: 'Today' },
-              { id: 'yesterday', label: 'Yesterday' },
-              { id: 'week', label: 'Last 7 Days' },
-              { id: 'month', label: 'This Month' },
-              { id: 'custom', label: 'Custom' },
-            ].map((dr) => (
-              <button
-                key={dr.id}
-                onClick={() => setDateRange(dr.id)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer border ${
-                  dateRange === dr.id
-                    ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
-                    : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                {dr.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Custom Date Pickers */}
-        {dateRange === 'custom' && (
-          <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200 flex-wrap">
-            <span className="text-xs font-bold text-slate-700">From:</span>
-            <input
-              type="date"
-              value={customStartDate}
-              onChange={(e) => setCustomStartDate(e.target.value)}
-              className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold outline-none"
-            />
-            <span className="text-xs font-bold text-slate-700">To:</span>
-            <input
-              type="date"
-              value={customEndDate}
-              onChange={(e) => setCustomEndDate(e.target.value)}
-              className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold outline-none"
-            />
-          </div>
-        )}
-
-        {/* Filter Controls Row */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-slate-100">
-          <div>
-            <SearchBar
-              value={search}
-              onChange={setSearch}
-              placeholder="Search library, staff, city, phone..."
-            />
-          </div>
-
-          <div>
-            <select
-              value={selectedStaff}
-              onChange={(e) => setSelectedStaff(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
-            >
-              <option value="All">All Staff & Admins ({visits.length} visits)</option>
-              {staffBreakdown.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.isAdmin ? '👑 ' : ''}{s.name} ({s.totalVisits} visits)
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
-            >
-              <option value="All">All Lead Statuses</option>
-              <option value="Interested">Interested</option>
-              <option value="Demo Given">Demo Given</option>
-              <option value="Follow Up">Follow Up</option>
-              <option value="Deal Closed">Deal Closed / Won</option>
-              <option value="Not Interested">Not Interested</option>
-            </select>
-          </div>
-
-          <div className="flex items-center justify-end text-xs font-bold text-slate-500">
-            Showing <strong className="text-slate-900 mx-1">{filteredVisits.length}</strong> of {visits.length} records
-          </div>
-        </div>
-
-        {/* Audit Log Table */}
-        <div className="overflow-x-auto border border-slate-200/80 rounded-xl">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-200 bg-slate-50/75 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
-                <th className="px-4 py-3.5">Logged By (Staff)</th>
-                <th className="px-4 py-3.5">Date & Exact Time</th>
-                <th className="px-5 py-3.5">Library / Business</th>
-                <th className="px-4 py-3.5">Contact Person</th>
-                <th className="px-4 py-3.5">Status</th>
-                <th className="px-4 py-3.5">Proof & GPS</th>
-                <th className="px-5 py-3.5">Discussion Summary</th>
-                <th className="px-4 py-3.5 text-right">Details</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-xs">
-              {filteredVisits.length > 0 ? (
-                filteredVisits.map((v) => {
-                  const dt = formatDateTime(v.createdAt);
-                  return (
-                    <tr key={v.id} className="hover:bg-slate-50/70 transition">
-                      {/* Logged By */}
-                      <td className="px-4 py-3.5 whitespace-nowrap">
-                        {(() => {
-                          const isAdm =
-                            (v.staffName || '').toLowerCase().includes('admin') ||
-                            (v.staffName || '').toLowerCase().includes('owner') ||
-                            String(v.staffId || '').toLowerCase().includes('admin');
-                          return (
-                            <div className="flex items-center gap-2">
+                      return (
+                        <tr
+                          key={s.id}
+                          className={`hover:bg-slate-50/80 transition ${isSelected ? 'bg-blue-50/50' : ''}`}
+                        >
+                          <td className="px-5 py-3.5 font-medium">
+                            <div className="flex items-center gap-3">
                               <div
-                                className={`w-7 h-7 rounded-lg font-extrabold text-xs flex items-center justify-center shrink-0 shadow-2xs ${
-                                  isAdm
-                                    ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                                    : 'bg-blue-100 text-blue-800'
+                                className={`w-8 h-8 rounded-xl font-extrabold text-xs flex items-center justify-center shrink-0 shadow-2xs ${
+                                  s.isAdmin
+                                    ? 'bg-gradient-to-tr from-amber-600 to-yellow-500 text-white border border-amber-300'
+                                    : 'bg-gradient-to-tr from-slate-800 to-blue-700 text-white'
                                 }`}
                               >
-                                {isAdm ? (
-                                  <Crown size={14} className="text-amber-700" />
-                                ) : (
-                                  (v.staffName || 'S').substring(0, 1).toUpperCase()
-                                )}
+                                {s.isAdmin ? <Crown size={15} /> : s.name.substring(0, 2).toUpperCase()}
                               </div>
                               <div>
                                 <div className="flex items-center gap-1.5">
-                                  <span className="font-bold text-slate-900 block text-xs">
-                                    {v.staffName || 'Staff Member'}
-                                  </span>
-                                  {isAdm && (
+                                  <span className="font-bold text-slate-900 block">{s.name}</span>
+                                  {s.isAdmin && (
                                     <span className="text-[9px] font-black uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300 px-1 py-0.2 rounded">
-                                      Admin
+                                      Owner / Admin
                                     </span>
                                   )}
                                 </div>
-                                <span className="text-[10px] text-slate-400 block">{v.clientType || 'Library'}</span>
+                                <span className="text-[10px] text-slate-400 block">{s.roleLabel}</span>
                               </div>
                             </div>
-                          );
-                        })()}
-                      </td>
+                          </td>
 
-                      {/* Date & Exact Time */}
-                      <td className="px-4 py-3.5 whitespace-nowrap">
-                        <div className="font-bold text-slate-800 text-xs flex items-center gap-1">
-                          <Calendar size={12} className="text-slate-400" />
-                          <span>{dt.date}</span>
-                        </div>
-                        {dt.time && (
-                          <div className="text-[11px] font-semibold text-blue-600 flex items-center gap-1 mt-0.5">
-                            <Clock size={11} />
-                            <span>{dt.time}</span>
-                          </div>
-                        )}
-                        {v.checkInTime && (
-                          <span className="text-[10px] text-slate-400 block mt-0.5">
-                            In: {v.checkInTime} {v.checkOutTime ? `- Out: ${v.checkOutTime}` : ''}
-                          </span>
-                        )}
-                      </td>
+                          <td className="px-4 py-3.5 text-center">
+                            <span className="font-black text-slate-900 text-sm">{s.totalVisits}</span>
+                          </td>
 
-                      {/* Business & City */}
-                      <td className="px-5 py-3.5">
-                        <div className="font-bold text-slate-900 text-xs">{v.businessName}</div>
-                        <div className="text-[11px] text-slate-500 mt-0.5">
-                          {v.city ? `${v.city}, ` : ''}{v.state || ''}
-                          {v.seatCapacity && <span className="ml-1 text-[10px] bg-slate-100 px-1 py-0.2 rounded font-semibold text-slate-600">🪑 {v.seatCapacity}</span>}
-                        </div>
-                      </td>
+                          <td className="px-4 py-3.5 text-center">
+                            <span className={`px-2 py-0.5 rounded-full font-bold text-xs ${s.todayVisits > 0 ? 'bg-emerald-100 text-emerald-800' : 'text-slate-400'}`}>
+                              {s.todayVisits}
+                            </span>
+                          </td>
 
-                      {/* Contact & Met Person */}
-                      <td className="px-4 py-3.5 whitespace-nowrap">
-                        <div className="font-bold text-slate-800 text-xs">
-                          {v.ownerName || v.contactPersonName || 'Owner'}
-                          {v.personMet && <span className="ml-1 text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded font-semibold">({v.personMet.split(' ')[0]})</span>}
-                        </div>
-                        {v.phone && (
-                          <div className="flex items-center gap-1.5 mt-0.5 text-slate-500 text-[11px]">
-                            <a href={`tel:${v.phone}`} className="text-blue-600 hover:text-blue-800">
-                              <Phone size={11} />
-                            </a>
-                            <a href={`https://wa.me/91${v.phone.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-800">
-                              <MessageCircle size={11} />
-                            </a>
-                            <span>{v.phone}</span>
-                          </div>
-                        )}
-                      </td>
+                          <td className="px-4 py-3.5 text-center font-bold text-slate-700">
+                            {s.weekVisits}
+                          </td>
 
-                      {/* Status */}
-                      <td className="px-4 py-3.5 whitespace-nowrap">
-                        <Badge variant={getStatusBadgeVariant(v.status)} size="sm">
-                          {v.status}
-                        </Badge>
-                        {v.leadPriority && (
-                          <span className={`block text-[10px] font-bold mt-1 ${v.leadPriority === 'Hot' ? 'text-rose-600' : v.leadPriority === 'Warm' ? 'text-amber-600' : 'text-blue-600'}`}>
-                            {v.leadPriority === 'Hot' ? '🔥 Hot' : v.leadPriority === 'Warm' ? '⚡ Warm' : '❄️ Cold'}
-                          </span>
-                        )}
-                      </td>
+                          <td className="px-4 py-3.5 text-center font-bold text-slate-700">
+                            {s.monthVisits}
+                          </td>
 
-                      {/* Proof & GPS */}
-                      <td className="px-4 py-3.5 whitespace-nowrap">
-                        <div className="flex items-center gap-2">
-                          {v.photoUrl ? (
-                            <button
-                              onClick={() => setPreviewPhoto(v.photoUrl)}
-                              className="w-8 h-8 rounded-lg overflow-hidden border border-slate-200 hover:ring-2 hover:ring-blue-500 transition cursor-pointer shrink-0"
-                              title="Click to view live photo proof"
-                            >
-                              <img src={v.photoUrl} alt="Visit proof" className="w-full h-full object-cover" />
-                            </button>
-                          ) : (
-                            <span className="text-[10px] text-slate-300 italic">No photo</span>
-                          )}
+                          <td className="px-4 py-3.5 text-center font-semibold text-slate-700">
+                            {s.demos > 0 ? `💻 ${s.demos}` : '-'}
+                          </td>
 
-                          <div>
-                            {v.location ? (
-                              <a
-                                href={v.location.mapsUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-600 hover:text-blue-800"
-                              >
-                                <MapPin size={10} /> GPS (±{v.location.accuracy || 10}m)
-                              </a>
+                          <td className="px-4 py-3.5 text-center">
+                            <span className={`font-black ${s.deals > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
+                              {s.deals > 0 ? `🎉 ${s.deals}` : '-'}
+                            </span>
+                          </td>
+
+                          <td className="px-4 py-3.5 text-center font-bold text-blue-700 whitespace-nowrap">
+                            ⏱️ {formatDurationMinutes(s.totalGroundMins)}
+                          </td>
+
+                          <td className="px-4 py-3.5 text-center">
+                            <span className={`font-bold text-[11px] ${gpsRate >= 80 ? 'text-emerald-700' : gpsRate >= 50 ? 'text-amber-700' : 'text-slate-400'}`}>
+                              {gpsRate}%
+                            </span>
+                          </td>
+
+                          <td className="px-5 py-3.5 text-slate-600">
+                            {lastDt ? (
+                              <div>
+                                <p className="font-bold text-slate-800 text-[11px] truncate max-w-[180px]">
+                                  {s.lastVisit.businessName}
+                                </p>
+                                <p className="text-[10px] text-slate-400">
+                                  {lastDt.date} at {lastDt.time}
+                                </p>
+                              </div>
                             ) : (
-                              <span className="text-[10px] text-slate-400 block">No GPS</span>
+                              <span className="text-slate-400 italic text-[11px]">No visits yet</span>
                             )}
-                          </div>
-                        </div>
-                      </td>
+                          </td>
 
-                      {/* Discussion & Reminder */}
-                      <td className="px-5 py-3.5 max-w-xs">
-                        <p className="text-slate-700 line-clamp-2 text-xs leading-relaxed">
-                          {v.discussionNotes || <span className="italic text-slate-400">No notes</span>}
-                        </p>
-                        {v.reminderNote && (
-                          <p className="text-[10px] text-amber-800 font-semibold mt-1 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200/60 line-clamp-1">
-                            🔔 {v.reminderNote}
-                          </p>
-                        )}
-                      </td>
-
-                      {/* Actions */}
-                      <td className="px-4 py-3.5 text-right whitespace-nowrap">
-                        <button
-                          onClick={() => setSelectedVisit(v)}
-                          className="px-2.5 py-1.5 bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 text-xs font-bold rounded-lg transition inline-flex items-center gap-1 cursor-pointer"
-                        >
-                          <Eye size={12} />
-                          <span>View</span>
-                        </button>
+                          <td className="px-4 py-3.5 text-right">
+                            <button
+                              onClick={() => {
+                                setSelectedStaff(isSelected ? 'All' : s.id);
+                                setActiveTab('audit_log');
+                              }}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer border ${
+                                isSelected
+                                  ? 'bg-blue-600 text-white border-blue-600'
+                                  : 'bg-white text-slate-700 border-slate-200 hover:bg-blue-50 hover:text-blue-700'
+                              }`}
+                            >
+                              {isSelected ? 'Selected' : 'View Logs'}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td colSpan={11} className="p-8 text-center text-slate-400">
+                        No staff records found.
                       </td>
                     </tr>
-                  );
-                })
-              ) : (
-                <tr>
-                  <td colSpan={8} className="p-8">
-                    <EmptyState
-                      icon={ClipboardList}
-                      title="No visit entries match your filters"
-                      description="Try clearing search or selecting 'All Time' to view previous marketing visits."
-                    />
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* ═══ Inspection Modal: Full Visit Report ═══ */}
-      {selectedVisit && (
-        <Modal
-          isOpen={!!selectedVisit}
-          onClose={() => setSelectedVisit(null)}
-          title={`Field Visit Report: ${selectedVisit.businessName}`}
-          subtitle={`Logged by ${selectedVisit.staffName || 'Staff Member'} on ${formatDateTime(selectedVisit.createdAt).date}`}
-          maxWidth="max-w-2xl"
-        >
-          <div className="space-y-4">
-            {/* Top Photo Proof Banner if available */}
-            {selectedVisit.photoUrl && (
-              <div className="relative rounded-2xl overflow-hidden border border-slate-200 max-h-64 bg-slate-900 group">
-                <img
-                  src={selectedVisit.photoUrl}
-                  alt="On-Site Proof"
-                  className="w-full h-full object-cover max-h-64 mx-auto"
-                />
-                <button
-                  type="button"
-                  onClick={() => setPreviewPhoto(selectedVisit.photoUrl)}
-                  className="absolute bottom-3 right-3 px-3 py-1.5 bg-black/70 hover:bg-black text-white text-xs font-bold rounded-lg backdrop-blur-md transition flex items-center gap-1.5 cursor-pointer shadow-lg"
-                >
-                  <ExternalLink size={13} />
-                  <span>Full Screen Photo</span>
-                </button>
-              </div>
-            )}
-
-            {/* Core Visit Info Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/80 text-xs">
-              <div>
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Logged By</span>
-                <span className="font-bold text-slate-900 flex items-center gap-1 mt-0.5">
-                  {((selectedVisit.staffName || '').toLowerCase().includes('admin') ||
-                    (selectedVisit.staffName || '').toLowerCase().includes('owner') ||
-                    String(selectedVisit.staffId || '').toLowerCase().includes('admin')) && (
-                    <Crown size={13} className="text-amber-600 shrink-0" />
                   )}
-                  <span>{selectedVisit.staffName || 'Staff Member'}</span>
-                </span>
-              </div>
-              <div>
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Date & Time</span>
-                <span className="font-bold text-slate-900 block mt-0.5">
-                  {formatDateTime(selectedVisit.createdAt).date} @ {formatDateTime(selectedVisit.createdAt).time}
-                </span>
-              </div>
-              <div>
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Status</span>
-                <Badge variant={getStatusBadgeVariant(selectedVisit.status)} size="sm" className="mt-1">
-                  {selectedVisit.status}
-                </Badge>
-              </div>
-              <div>
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Lead Heat</span>
-                <span className="font-bold text-slate-900 block mt-0.5">
-                  {selectedVisit.leadPriority || 'Warm'}
-                </span>
-              </div>
+                </tbody>
+              </table>
             </div>
+          </div>
+        </div>
+      )}
 
-            {/* Client & Contact Details */}
-            <div className="p-3.5 bg-blue-50/50 rounded-2xl border border-blue-100 text-xs space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-blue-950 text-sm">{selectedVisit.businessName}</span>
-                <span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded font-bold text-[10px]">
-                  {selectedVisit.clientType || 'Library'}
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {/* ═══ TAB 2: LEAD PIPELINE & COMPETITOR ANALYSIS ═══                    */}
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'pipeline_competitor' && (
+        <div className="space-y-6">
+          {/* Status Distribution Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            {[
+              { label: 'Interested', count: pipelineStats.statusCounts['Interested'], color: 'purple', icon: Flame },
+              { label: 'Demo Given', count: pipelineStats.statusCounts['Demo Given'], color: 'indigo', icon: Zap },
+              { label: 'Follow Up', count: pipelineStats.statusCounts['Follow Up'], color: 'amber', icon: Clock },
+              { label: 'Deals Won', count: pipelineStats.statusCounts['Deal Closed'], color: 'emerald', icon: CheckCircle2 },
+              { label: 'Not Interested', count: pipelineStats.statusCounts['Not Interested'], color: 'rose', icon: AlertCircle },
+            ].map((st) => (
+              <div key={st.label} className="p-4 bg-white rounded-2xl border border-slate-200/80 shadow-xs">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  {st.label}
+                </span>
+                <span className="text-2xl font-black text-slate-900 block mt-1">
+                  {st.count || 0}
+                </span>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">
+                  {visits.length ? `${Math.round(((st.count || 0) / visits.length) * 100)}% of all visits` : '0%'}
                 </span>
               </div>
-              <p className="text-slate-600">
-                {selectedVisit.address ? `${selectedVisit.address}, ` : ''}{selectedVisit.city}, {selectedVisit.state}
-              </p>
-              <div className="flex items-center gap-4 pt-1 font-medium text-slate-700">
-                <span>Owner: <strong>{selectedVisit.ownerName || 'N/A'}</strong></span>
-                {selectedVisit.personMet && <span>Met: <strong>{selectedVisit.personMet}</strong></span>}
-                {selectedVisit.phone && (
-                  <span className="flex items-center gap-1.5">
-                    📞 <a href={`tel:${selectedVisit.phone}`} className="text-blue-600 font-bold hover:underline">{selectedVisit.phone}</a>
-                  </span>
-                )}
-                {selectedVisit.secondaryPhone && (
-                  <span className="text-slate-500">Alt: {selectedVisit.secondaryPhone}</span>
-                )}
-              </div>
-            </div>
+            ))}
+          </div>
 
-            {/* Competitor / Current Software */}
-            {selectedVisit.currentSoftwareType && (
-              <div className="p-3 bg-indigo-50/50 rounded-xl border border-indigo-100 text-xs flex items-center justify-between">
-                <div>
-                  <span className="text-[10px] text-indigo-700 font-bold uppercase tracking-wider block">Current Management</span>
-                  <span className="font-bold text-indigo-950 text-xs mt-0.5 block">
-                    {selectedVisit.currentSoftwareType} {selectedVisit.competitorName ? `(${selectedVisit.competitorName})` : ''}
-                  </span>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Competitor Systems Used by Libraries */}
+            <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-5 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <Layers size={18} className="text-indigo-600" />
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">
+                    Current Management Systems Used
+                  </h3>
                 </div>
-                {selectedVisit.competitorExpiryDate && (
-                  <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
-                    Expiry: {selectedVisit.competitorExpiryDate}
-                  </span>
-                )}
+                <span className="text-xs font-bold text-slate-400">Market Share</span>
               </div>
-            )}
 
-            {/* Re-Visit / Follow-Up Box */}
-            {(selectedVisit.reminderNote || selectedVisit.followUpDate) && (
-              <div className="p-3.5 bg-amber-50/80 rounded-2xl border border-amber-200 text-xs space-y-1.5">
-                <span className="font-bold text-amber-900 uppercase text-[10px] tracking-wider block">
-                  Re-Visit & Follow-Up Callback
-                </span>
-                {selectedVisit.followUpDate && (
-                  <p className="text-xs font-black text-amber-950">
-                    📅 Date: {selectedVisit.followUpDate} {selectedVisit.followUpTime ? `@ ${selectedVisit.followUpTime}` : ''}
-                  </p>
-                )}
-                {selectedVisit.reminderNote && (
-                  <p className="text-xs font-medium text-amber-900 bg-white/80 p-2.5 rounded-xl border border-amber-200/60">
-                    📝 {selectedVisit.reminderNote}
-                  </p>
-                )}
+              <div className="space-y-3">
+                {Object.entries(pipelineStats.softwareTypeCounts).map(([type, count]) => {
+                  const pct = visits.length ? Math.round((count / visits.length) * 100) : 0;
+                  return (
+                    <div key={type} className="space-y-1">
+                      <div className="flex items-center justify-between text-xs font-bold">
+                        <span className="text-slate-800">{type}</span>
+                        <span className="text-slate-500">{count} places ({pct}%)</span>
+                      </div>
+                      <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                        <div
+                          className="bg-indigo-600 h-full rounded-full transition-all"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            )}
+            </div>
 
-            {/* Discussion Notes */}
-            <div>
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                Meeting Discussion Notes
+            {/* Competitor Brands Encountered */}
+            <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-5 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2">
+                  <Target size={18} className="text-rose-600" />
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">
+                    Competitor Software Brands
+                  </h3>
+                </div>
+                <span className="text-xs font-bold text-slate-400">Tracked</span>
+              </div>
+
+              {pipelineStats.competitorCounts.length > 0 ? (
+                <div className="space-y-2.5">
+                  {pipelineStats.competitorCounts.map(([name, count]) => (
+                    <div
+                      key={name}
+                      className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 flex items-center justify-between text-xs"
+                    >
+                      <div>
+                        <span className="font-extrabold text-slate-900 block text-xs">{name}</span>
+                        <span className="text-[10px] text-slate-400">Library Management Competitor</span>
+                      </div>
+                      <span className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg font-black text-indigo-700 shadow-2xs">
+                        {count} Clients
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-8 text-center text-slate-400 text-xs">
+                  No competitor brands noted yet in field visit logs.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Competitor Expiry Radar: Hot Switch Targets (35 Days) */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-5 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Flame size={20} className="text-rose-600" />
+                  <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider">
+                    Competitor Expiry Radar — Hot Switch Targets ({expiringCompetitors.length})
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  Libraries whose current competitor software is expiring within 35 days. Target them now before they renew!
+                </p>
+              </div>
+              <span className="text-xs font-bold text-rose-700 bg-rose-50 border border-rose-200 px-3 py-1 rounded-xl w-fit">
+                🔥 High Conversion Window
               </span>
-              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs text-slate-800 leading-relaxed whitespace-pre-wrap">
-                {selectedVisit.discussionNotes || 'No discussion notes logged.'}
-              </div>
             </div>
 
-            {/* GPS Verification */}
-            {selectedVisit.location && (
-              <div className="p-3.5 bg-emerald-50/60 rounded-xl border border-emerald-100 flex items-center justify-between text-xs">
-                <div>
-                  <p className="font-bold text-emerald-950 flex items-center gap-1">
-                    <MapPin size={13} className="text-emerald-600" />
-                    <span>GPS On-Site Verification Confirmed</span>
-                  </p>
-                  <p className="text-[10px] text-emerald-700 mt-0.5">
-                    Lat: {selectedVisit.location.latitude}, Lng: {selectedVisit.location.longitude} (±{selectedVisit.location.accuracy || 10}m)
-                  </p>
-                </div>
-                <a
-                  href={selectedVisit.location.mapsUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg text-xs transition flex items-center gap-1"
-                >
-                  <ExternalLink size={12} />
-                  <span>Open in Maps</span>
-                </a>
+            {expiringCompetitors.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead className="bg-slate-50/80 border-b border-slate-100 text-[11px] font-bold text-slate-500 uppercase">
+                    <tr>
+                      <th className="px-4 py-3">Library / Business</th>
+                      <th className="px-4 py-3">Owner Contact</th>
+                      <th className="px-4 py-3">Current Software</th>
+                      <th className="px-4 py-3">Expiry Date</th>
+                      <th className="px-4 py-3">Urgency Status</th>
+                      <th className="px-4 py-3 text-right">Quick Contact</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {expiringCompetitors.map((item) => (
+                      <tr key={item.id} className="hover:bg-slate-50/70 transition">
+                        <td className="px-4 py-3.5">
+                          <p className="font-extrabold text-slate-900">{item.businessName}</p>
+                          <span className="text-[10px] text-slate-400 font-semibold">
+                            {item.clientType || 'Library'} • {item.city || 'Local'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <p className="font-bold text-slate-800">{item.ownerName || 'Owner'}</p>
+                          <span className="text-[11px] text-slate-500">{item.phone || 'No phone'}</span>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-lg">
+                            💻 {item.competitorName || 'Competitor'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <span className="font-extrabold text-slate-900">{item.competitorExpiryDate}</span>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          {item.isUrgent ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-black text-rose-700 bg-rose-100 border border-rose-300 px-2 py-0.5 rounded-full animate-pulse">
+                              🚨 {item.daysRemaining} days left!
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                              ⏳ {item.daysRemaining} days left
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3.5 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {item.phone && (
+                              <>
+                                <a
+                                  href={`tel:${item.phone}`}
+                                  className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-lg flex items-center gap-1 transition"
+                                  title="Call"
+                                >
+                                  <PhoneCall size={11} /> Call
+                                </a>
+                                <a
+                                  href={`https://wa.me/91${item.phone.replace(/\D/g, '')}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold rounded-lg flex items-center gap-1 transition"
+                                  title="WhatsApp"
+                                >
+                                  <MessageCircle size={11} /> WhatsApp
+                                </a>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="p-8 text-center text-slate-400 text-xs bg-slate-50 rounded-xl border border-slate-100">
+                No competitor licenses expiring in the next 35 days found in the system. Log competitor renewal dates during field visits to populate this radar!
               </div>
             )}
           </div>
-        </Modal>
+        </div>
       )}
 
-      {/* ═══ Photo Lightbox Modal ═══ */}
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {/* ═══ TAB 3: FULL VISITS AUDIT LOG ═══                                  */}
+      {/* ═══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'audit_log' && (
+        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden space-y-4 p-5">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                <ClipboardList size={18} className="text-blue-600" />
+                <span>Full Field Visits Activity Log ({filteredVisits.length} Records)</span>
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Exact arrival time, departure time, duration on site, verified GPS, and discussion notes
+              </p>
+            </div>
+
+            {/* Quick Date Range Filters */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {[
+                { id: 'all', label: 'All Time' },
+                { id: 'today', label: 'Today' },
+                { id: 'yesterday', label: 'Yesterday' },
+                { id: 'week', label: 'Last 7 Days' },
+                { id: 'month', label: 'This Month' },
+                { id: 'custom', label: 'Custom' },
+              ].map((dr) => (
+                <button
+                  key={dr.id}
+                  onClick={() => setDateRange(dr.id)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer border ${
+                    dateRange === dr.id
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  {dr.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Custom Date Pickers */}
+          {dateRange === 'custom' && (
+            <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200 flex-wrap">
+              <span className="text-xs font-bold text-slate-700">From:</span>
+              <input
+                type="date"
+                value={customStartDate}
+                onChange={(e) => setCustomStartDate(e.target.value)}
+                className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold outline-none"
+              />
+              <span className="text-xs font-bold text-slate-700">To:</span>
+              <input
+                type="date"
+                value={customEndDate}
+                onChange={(e) => setCustomEndDate(e.target.value)}
+                className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold outline-none"
+              />
+            </div>
+          )}
+
+          {/* Filter Controls Row */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-slate-100">
+            <div>
+              <SearchBar
+                value={search}
+                onChange={setSearch}
+                placeholder="Search library, staff, city, phone..."
+              />
+            </div>
+
+            <div>
+              <select
+                value={selectedStaff}
+                onChange={(e) => setSelectedStaff(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
+              >
+                <option value="All">All Staff & Admins ({visits.length} visits)</option>
+                {staffBreakdown.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.isAdmin ? '👑 ' : ''}{s.name} ({s.totalVisits} visits)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
+              >
+                <option value="All">All Lead Statuses</option>
+                <option value="Interested">Interested</option>
+                <option value="Demo Given">Demo Given</option>
+                <option value="Follow Up">Follow Up</option>
+                <option value="Deal Closed">Deal Closed / Won</option>
+                <option value="Not Interested">Not Interested</option>
+              </select>
+            </div>
+
+            <div className="flex items-center justify-end text-xs font-bold text-slate-500">
+              Showing <strong className="text-slate-900 mx-1">{filteredVisits.length}</strong> of {visits.length} records
+            </div>
+          </div>
+
+          {/* Audit Log Table */}
+          <div className="overflow-x-auto border border-slate-200/80 rounded-xl">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50/75 text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                  <th className="px-4 py-3.5">Logged By (Staff)</th>
+                  <th className="px-4 py-3.5">Date & Exact Time & Duration</th>
+                  <th className="px-5 py-3.5">Library / Business</th>
+                  <th className="px-4 py-3.5">Contact Person</th>
+                  <th className="px-4 py-3.5">Status</th>
+                  <th className="px-4 py-3.5">Boss Verification & GPS</th>
+                  <th className="px-5 py-3.5">Discussion Summary</th>
+                  <th className="px-4 py-3.5 text-right">Details</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs">
+                {filteredVisits.length > 0 ? (
+                  filteredVisits.map((v) => {
+                    const dt = formatDateTime(v.createdAt);
+                    const dur = getVisitDurationMinutes(v);
+                    const auth = evaluateVisitAuthenticity(v);
+
+                    return (
+                      <tr key={v.id} className="hover:bg-slate-50/70 transition">
+                        {/* Logged By */}
+                        <td className="px-4 py-3.5 whitespace-nowrap">
+                          {(() => {
+                            const isAdm =
+                              (v.staffName || '').toLowerCase().includes('admin') ||
+                              (v.staffName || '').toLowerCase().includes('owner') ||
+                              String(v.staffId || '').toLowerCase().includes('admin');
+                            return (
+                              <div className="flex items-center gap-2">
+                                <div
+                                  className={`w-7 h-7 rounded-lg font-extrabold text-xs flex items-center justify-center shrink-0 shadow-2xs ${
+                                    isAdm
+                                      ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                      : 'bg-blue-100 text-blue-800'
+                                  }`}
+                                >
+                                  {isAdm ? (
+                                    <Crown size={14} className="text-amber-700" />
+                                  ) : (
+                                    (v.staffName || 'S').substring(0, 1).toUpperCase()
+                                  )}
+                                </div>
+                                <div>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-bold text-slate-900 block text-xs">
+                                      {v.staffName || 'Staff Member'}
+                                    </span>
+                                    {isAdm && (
+                                      <span className="text-[9px] font-black uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300 px-1 py-0.2 rounded">
+                                        Admin
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
+                        </td>
+
+                        {/* Date, Exact Time & Duration */}
+                        <td className="px-4 py-3.5 whitespace-nowrap">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-50 text-blue-900 border border-blue-200 rounded-lg w-fit shadow-2xs">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-blue-600">Entry Made At:</span>
+                              <strong className="text-xs font-black">{dt.time}</strong>
+                              <span className="text-[10px] text-slate-500">({dt.date})</span>
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="text-[11px] font-semibold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200" title="On-site visit time">
+                                🚶 Visit: {formatDisplayTime(v.checkInTime, v.createdAt)} → {formatDisplayTime(v.checkOutTime)}
+                              </span>
+                              {dur > 0 && (
+                                <span className="text-[10px] font-black text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.2 rounded">
+                                  ⏱️ {formatDurationMinutes(dur)} on site
+                                </span>
+                              )}
+                              {(() => {
+                                const sync = evaluateSyncDelay(v.checkInTime, v.createdAt);
+                                return (
+                                  <span className={`text-[9px] font-black px-1.5 py-0.2 rounded border ${sync.badgeClass}`}>
+                                    {sync.label}
+                                  </span>
+                                );
+                              })()}
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Business Name */}
+                        <td className="px-5 py-3.5">
+                          <p className="font-bold text-slate-900 text-xs sm:text-sm">
+                            {v.businessName || 'Unnamed Business'}
+                          </p>
+                          <span className="text-[10px] text-slate-400 block mt-0.5">
+                            {v.clientType || 'Library'} • {v.city || 'Local'}
+                            {v.seatCapacity ? ` • 🪑 ${v.seatCapacity}` : ''}
+                          </span>
+                        </td>
+
+                        {/* Contact Person */}
+                        <td className="px-4 py-3.5 whitespace-nowrap">
+                          <span className="font-bold text-slate-800 block text-xs">
+                            {v.ownerName || v.contactPersonName || 'N/A'}
+                          </span>
+                          {v.phone && (
+                            <div className="flex items-center gap-1.5 text-[10px] text-slate-500 mt-0.5">
+                              <a
+                                href={`tel:${v.phone}`}
+                                className="text-blue-600 hover:text-blue-800"
+                                title="Call"
+                              >
+                                <PhoneCall size={10} />
+                              </a>
+                              <a
+                                href={`https://wa.me/91${v.phone.replace(/\D/g, '')}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-emerald-600 hover:text-emerald-800"
+                                title="WhatsApp"
+                              >
+                                <MessageCircle size={10} />
+                              </a>
+                              <span>{v.phone}</span>
+                            </div>
+                          )}
+                        </td>
+
+                        {/* Status */}
+                        <td className="px-4 py-3.5 whitespace-nowrap">
+                          <Badge variant={getStatusBadgeVariant(v.status)} size="sm">
+                            {v.status}
+                          </Badge>
+                        </td>
+
+                        {/* Proof & GPS Verification */}
+                        <td className="px-4 py-3.5 whitespace-nowrap">
+                          <div className="space-y-1">
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-black border inline-flex items-center gap-1 ${auth.badgeClass}`}>
+                              {auth.isGenuine ? <ShieldCheck size={11} className="text-emerald-700" /> : <ShieldAlert size={11} />}
+                              <span>{auth.statusText}</span>
+                            </span>
+
+                            <div className="flex items-center gap-2">
+                              {v.photoUrl ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setPreviewPhoto(v.photoUrl)}
+                                  className="text-[10px] text-blue-600 hover:text-blue-800 font-bold inline-flex items-center gap-0.5 cursor-pointer"
+                                >
+                                  <Camera size={10} /> Photo
+                                </button>
+                              ) : (
+                                <span className="text-[10px] text-slate-400 italic">No photo</span>
+                              )}
+
+                              {v.location ? (
+                                <a
+                                  href={v.location.mapsUrl || `https://www.google.com/maps?q=${v.location.latitude},${v.location.longitude}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-[10px] text-emerald-700 hover:text-emerald-900 font-bold inline-flex items-center gap-0.5"
+                                >
+                                  <MapPin size={10} /> GPS (±{v.location.accuracy || 10}m)
+                                </a>
+                              ) : (
+                                <span className="text-[10px] text-rose-600 font-bold">No GPS ⚠️</span>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* Discussion & Reminder */}
+                        <td className="px-5 py-3.5 max-w-xs">
+                          <p className="text-slate-700 line-clamp-2 text-xs leading-relaxed">
+                            {v.discussionNotes || <span className="italic text-slate-400">No notes</span>}
+                          </p>
+                          {v.reminderNote && (
+                            <p className="text-[10px] text-amber-800 font-semibold mt-1 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200/60 line-clamp-1">
+                              🔔 {v.reminderNote}
+                            </p>
+                          )}
+                        </td>
+
+                        {/* Actions */}
+                        <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                          <button
+                            onClick={() => setSelectedVisit(v)}
+                            className="px-2.5 py-1.5 bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 text-xs font-bold rounded-lg transition inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <Eye size={12} />
+                            <span>View</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={8} className="p-8">
+                      <EmptyState
+                        icon={ClipboardList}
+                        title="No visit entries match your filters"
+                        description="Try clearing search or selecting 'All Time' to view previous marketing visits."
+                      />
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ Inspection Modal ═══ */}
+      <Modal
+        isOpen={!!selectedVisit}
+        onClose={() => setSelectedVisit(null)}
+        title={selectedVisit?.businessName || 'Visit Details'}
+        subtitle={`Logged by ${selectedVisit?.staffName} on ${formatDateTime(selectedVisit?.createdAt).date}`}
+        maxWidth="max-w-2xl"
+      >
+        {selectedVisit && (
+          <div className="space-y-4 text-xs">
+            {/* On-Site Photo Proof */}
+            {selectedVisit.photoUrl && (
+              <div className="relative rounded-2xl overflow-hidden border border-slate-200 shadow-xs max-h-56 bg-slate-900">
+                <img
+                  src={selectedVisit.photoUrl}
+                  alt={selectedVisit.businessName}
+                  className="w-full h-56 object-cover object-center"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent flex items-end justify-between p-3.5">
+                  <span className="text-white text-xs font-bold flex items-center gap-1.5">
+                    <Camera size={14} className="text-emerald-400" />
+                    <span>On-Site Photo Proof</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewPhoto(selectedVisit.photoUrl)}
+                    className="px-2.5 py-1 bg-white/90 hover:bg-white text-slate-900 text-xs font-bold rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1"
+                  >
+                    <span>View Full Size</span>
+                    <ExternalLink size={11} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Boss Ground Verification Box */}
+            {(() => {
+              const auth = evaluateVisitAuthenticity(selectedVisit);
+              const dur = getVisitDurationMinutes(selectedVisit);
+              return (
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                      <ShieldCheck size={14} className="text-blue-600" />
+                      <span>Boss Ground Verification & Authenticity</span>
+                    </span>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${auth.badgeClass}`}>
+                      {auth.statusText}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                    <div className="p-2.5 bg-white rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-bold uppercase block">🚶 On-Site Visit Time</span>
+                      <span className="font-bold text-blue-700 block">⏱️ {formatDurationMinutes(dur)} on site</span>
+                      <span className="text-[10px] text-slate-600 font-semibold block mt-0.5">
+                        {formatDisplayTime(selectedVisit.checkInTime, selectedVisit.createdAt)} → {formatDisplayTime(selectedVisit.checkOutTime)}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-amber-700 font-bold uppercase block">📥 Server Entry Received</span>
+                      <span className="font-bold text-amber-900 block">🕒 {formatEntryTimestamp(selectedVisit.createdAt).time}</span>
+                      <span className="text-[10px] text-slate-500 block">📅 {formatEntryTimestamp(selectedVisit.createdAt).date}</span>
+                      <span className="text-[9px] font-bold text-emerald-700 block mt-0.5">
+                        {evaluateSyncDelay(selectedVisit.checkInTime, selectedVisit.createdAt).label}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-bold uppercase block">GPS Accuracy</span>
+                      <span className="font-bold text-slate-800 block">
+                        {selectedVisit.location ? `±${selectedVisit.location.accuracy || 15}m` : 'No GPS'}
+                      </span>
+                      {auth.distanceToPlace != null && (
+                        <span className={`text-[10px] font-bold block mt-0.5 ${auth.level === 'distance_alert' ? 'text-rose-600' : 'text-emerald-600'}`}>
+                          {auth.distanceToPlace > 800 ? `🚨 ${auth.distanceToPlace}m away` : `🎯 ${auth.distanceToPlace}m from place`}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Details Grid */}
+            <div className="grid grid-cols-2 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+              <div>
+                <span className="text-slate-400 font-bold uppercase block text-[10px]">Owner / Director</span>
+                <span className="font-bold text-slate-800 text-xs">{selectedVisit.ownerName || 'N/A'}</span>
+              </div>
+              <div>
+                <span className="text-slate-400 font-bold uppercase block text-[10px]">Mobile Contact</span>
+                <span className="font-bold text-slate-800 text-xs">{selectedVisit.phone || 'N/A'}</span>
+              </div>
+              <div>
+                <span className="text-slate-400 font-bold uppercase block text-[10px]">City & State</span>
+                <span className="font-bold text-slate-800 text-xs">
+                  {selectedVisit.city || 'N/A'}{selectedVisit.state ? `, ${selectedVisit.state}` : ''}
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-400 font-bold uppercase block text-[10px]">Address</span>
+                <span className="font-bold text-slate-800 text-xs">{selectedVisit.address || 'N/A'}</span>
+              </div>
+            </div>
+
+            {/* Discussion Notes */}
+            <div>
+              <span className="text-slate-400 font-bold uppercase block text-[10px] mb-1">Meeting Notes</span>
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-800 whitespace-pre-wrap">
+                {selectedVisit.discussionNotes || 'No notes entered.'}
+              </div>
+            </div>
+
+            {selectedVisit.reminderNote && (
+              <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs">
+                <span className="font-bold text-amber-900 block mb-0.5">🔔 Follow-up Reminder Note:</span>
+                <p className="text-amber-800">{selectedVisit.reminderNote}</p>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* ═══ Photo Preview Modal ═══ */}
       {previewPhoto && (
-        <div
-          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4"
-          onClick={() => setPreviewPhoto(null)}
+        <Modal
+          isOpen={!!previewPhoto}
+          onClose={() => setPreviewPhoto(null)}
+          title="On-Site Photo Proof"
+          subtitle="Captured directly from client premises"
+          maxWidth="max-w-xl"
         >
-          <div className="relative max-w-4xl max-h-[90vh] bg-slate-900 rounded-3xl overflow-hidden border border-white/20 shadow-2xl p-2" onClick={(e) => e.stopPropagation()}>
-            <img
-              src={previewPhoto}
-              alt="Live visit proof"
-              className="max-h-[80vh] w-auto mx-auto object-contain rounded-2xl"
-            />
-            <div className="flex items-center justify-between p-3 bg-slate-950/80 text-white text-xs">
-              <span className="font-bold">📷 On-Site Live Photo Proof</span>
+          <div className="space-y-4">
+            <div className="rounded-2xl overflow-hidden border border-slate-200 bg-slate-900">
+              <img
+                src={previewPhoto}
+                alt="On-Site Proof"
+                className="w-full max-h-[70vh] object-contain mx-auto"
+              />
+            </div>
+            <div className="flex items-center justify-end">
               <button
                 type="button"
                 onClick={() => setPreviewPhoto(null)}
-                className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg font-bold cursor-pointer"
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
               >
                 Close
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

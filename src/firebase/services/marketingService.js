@@ -59,6 +59,12 @@ export const getFieldVisits = async () => {
 };
 
 export const logFieldVisit = async (visitData) => {
+  const now = new Date();
+  const liveClockTime = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const liveOutTime = new Date(now.getTime() + 20 * 60000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+  const checkIn = (visitData.checkInTime && String(visitData.checkInTime).trim()) || liveClockTime;
+  const checkOut = (visitData.checkOutTime && String(visitData.checkOutTime).trim()) || liveOutTime;
+
   const cleaned = {
     staffId: visitData.staffId || 'admin',
     staffName: visitData.staffName || 'Administrator',
@@ -74,9 +80,9 @@ export const logFieldVisit = async (visitData) => {
     status: visitData.status || 'Interested',
     followUpDate: visitData.followUpDate || '',
     location: visitData.location || null,
-    checkInTime: visitData.checkInTime || new Date().toISOString(),
-    checkOutTime: visitData.checkOutTime || new Date().toISOString(),
-    durationMinutes: Number(visitData.durationMinutes) || 0,
+    checkInTime: checkIn,
+    checkOutTime: checkOut,
+    durationMinutes: Number(visitData.durationMinutes) || 20,
     // Field Marketing Enhanced Fields
     photoUrl: visitData.photoUrl || null,
     personMet: visitData.personMet || 'Owner',
@@ -92,7 +98,6 @@ export const logFieldVisit = async (visitData) => {
     followUpType: visitData.followUpType || 'In-Person Re-Visit',
     nextActionItem: visitData.nextActionItem || '',
     reminderNote: visitData.reminderNote ? visitData.reminderNote.trim() : '',
-    leadPriority: visitData.leadPriority || 'Warm',
     // Google Place linking fields
     placeId: visitData.placeId || null,
     placeName: visitData.placeName ? visitData.placeName.trim() : '',
@@ -100,6 +105,9 @@ export const logFieldVisit = async (visitData) => {
     placeRating: visitData.placeRating || null,
     placeLat: visitData.placeLat || null,
     placeLng: visitData.placeLng || null,
+    visitCount: Number(visitData.visitCount) || 1,
+    visitHistory: Array.isArray(visitData.visitHistory) ? visitData.visitHistory : [],
+    lastVisitedAt: visitData.lastVisitedAt || new Date().toISOString(),
     createdAt: new Date().toISOString(),
   };
 
@@ -145,7 +153,11 @@ export const updateFieldVisit = async (id, visitData) => {
   if (visitData.followUpType !== undefined) cleaned.followUpType = visitData.followUpType;
   if (visitData.nextActionItem !== undefined) cleaned.nextActionItem = visitData.nextActionItem;
   if (visitData.reminderNote !== undefined) cleaned.reminderNote = visitData.reminderNote.trim();
-  if (visitData.leadPriority !== undefined) cleaned.leadPriority = visitData.leadPriority;
+  if (visitData.visitCount !== undefined) cleaned.visitCount = Number(visitData.visitCount);
+  if (visitData.visitHistory !== undefined) cleaned.visitHistory = visitData.visitHistory;
+  if (visitData.lastVisitedAt !== undefined) cleaned.lastVisitedAt = visitData.lastVisitedAt;
+  if (visitData.lastStaffName !== undefined) cleaned.lastStaffName = visitData.lastStaffName;
+  if (visitData.lastStaffId !== undefined) cleaned.lastStaffId = visitData.lastStaffId;
 
   cleaned.updatedAt = new Date().toISOString();
 

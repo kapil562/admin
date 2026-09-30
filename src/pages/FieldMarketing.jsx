@@ -1,11 +1,11 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getFieldVisits, logFieldVisit, updateFieldVisit, updateVisitStatus, deleteFieldVisit, getCurrentGPSLocation } from '../firebase/services/marketingService';
 import { getStaffUsers } from '../firebase/services/staffService';
 import { searchNearbyLibraries, searchLibrariesByText, formatDistance, getNavigationUrl, getPlaceMapUrl, geocodeAddress, reverseGeocode, parseAddressDetails, getPlaceDetails } from '../services/googleMapsService';
 import { useAuth } from '../context/AuthContext';
 import { PageHeader } from '../components/ui/PageHeader';
-import { StatCard } from '../components/ui/StatCard';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { SearchBar } from '../components/ui/SearchBar';
@@ -34,6 +34,7 @@ import {
   Edit3,
   RotateCcw,
   Download,
+  Filter,
   Clock,
   AlertTriangle,
   ArrowRight,
@@ -45,13 +46,32 @@ import {
   Flame,
   Zap,
   Shield,
+  ShieldCheck,
+  ShieldAlert,
   FileCheck,
   Layers,
   HelpCircle,
   BellRing,
   Sparkles,
+  Send,
+  UserPlus,
+  Target,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import {
+  evaluateVisitAuthenticity,
+  getVisitDurationMinutes,
+  formatDurationMinutes,
+  calculateCheckoutTime,
+  formatDisplayTime,
+  formatEntryTimestamp,
+  evaluateSyncDelay,
+} from '../services/visitAuditHelper';
+import { restoreOrCreateLibraryClient } from '../firebase/services/libraryService';
+import {
+  getCompetitorExpiringLeads,
+  generateMultiStopGoogleMapsRoute,
+} from '../services/salesBoosterHelper';
 
 const VISIT_STATUSES = [
   { id: 'Interested', label: 'Interested (Good Lead)', variant: 'info' },
@@ -59,6 +79,15 @@ const VISIT_STATUSES = [
   { id: 'Follow Up', label: 'Follow Up Scheduled', variant: 'warning' },
   { id: 'Deal Closed', label: '🎉 Deal Closed / Subscribed', variant: 'success' },
   { id: 'Not Interested', label: 'Not Interested', variant: 'danger' },
+];
+
+const STATUS_FILTER_OPTIONS = [
+  { id: 'All', label: 'All', activeClass: 'bg-blue-600 text-white shadow-xs' },
+  { id: 'Interested', label: 'Interested', activeClass: 'bg-blue-600 text-white shadow-xs' },
+  { id: 'Demo Given', label: 'Demo Given', activeClass: 'bg-purple-600 text-white shadow-xs' },
+  { id: 'Follow Up', label: 'Follow Up', activeClass: 'bg-amber-600 text-white shadow-xs' },
+  { id: 'Deal Closed', label: 'Deal Closed', activeClass: 'bg-emerald-600 text-white shadow-xs' },
+  { id: 'Not Interested', label: 'Not Interested', activeClass: 'bg-rose-600 text-white shadow-xs' },
 ];
 
 const PERSON_MET_OPTIONS = [
@@ -82,12 +111,6 @@ const CURRENT_SOFTWARE_OPTIONS = [
   { id: 'Excel / Spreadsheets', label: '📊 Excel / Google Sheets', desc: 'Basic computer records' },
   { id: 'Competitor Software', label: '💻 Competitor Software', desc: 'Active other subscription' },
   { id: 'New Library', label: '🆕 New Library Setup', desc: 'Opening soon' },
-];
-
-const LEAD_PRIORITY_OPTIONS = [
-  { id: 'Hot', label: '🔥 Hot (Closing in 1-3 Days)', color: 'text-rose-600 bg-rose-50 border-rose-200' },
-  { id: 'Warm', label: '⚡ Warm (Interested, Needs Follow-up)', color: 'text-amber-600 bg-amber-50 border-amber-200' },
-  { id: 'Cold', label: '❄️ Cold (Long Term / Competitor Locked)', color: 'text-blue-600 bg-blue-50 border-blue-200' },
 ];
 
 const NEXT_ACTION_TAGS = [
@@ -150,7 +173,6 @@ const initialFormState = {
   discussionNotes: '',
   demoGiven: false,
   status: 'Interested',
-  leadPriority: 'Warm',
   // Person Met & Profile
   personMet: 'Owner / Director',
   contactPersonName: '',
@@ -230,9 +252,23 @@ export const FieldMarketing = () => {
   const [selectedStaffFilter, setSelectedStaffFilter] = useState('All');
   const [showModal, setShowModal] = useState(false);
   const [editingVisit, setEditingVisit] = useState(null);
+  const [revisitTarget, setRevisitTarget] = useState(null);
   const [selectedVisit, setSelectedVisit] = useState(null);
   const [statusDropdownId, setStatusDropdownId] = useState(null);
   const [previewPhotoUrl, setPreviewPhotoUrl] = useState(null);
+
+  // Sales Booster States (Onboarding & Expiry Radar)
+  const [showConvertModal, setShowConvertModal] = useState(null);
+  const [convertForm, setConvertForm] = useState({
+    email: '',
+    libraryName: '',
+    ownerName: '',
+    phone: '',
+    address: '',
+    planName: 'Annual Plan (1 Year)',
+  });
+  const [converting, setConverting] = useState(false);
+  const [showRadarModal, setShowRadarModal] = useState(false);
 
   // Nearby discovery state
   const [myLocation, setMyLocation] = useState(null);
@@ -288,9 +324,14 @@ export const FieldMarketing = () => {
     mutationFn: ({ id, data }) => updateFieldVisit(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin_field_visits'] });
-      toast.success('Visit updated! ✅');
+      if (revisitTarget) {
+        toast.success(`Re-visit recorded! Updated record for ${revisitTarget.businessName}. ✅`);
+      } else {
+        toast.success('Visit record updated! ✅');
+      }
       setShowModal(false);
       setEditingVisit(null);
+      setRevisitTarget(null);
       resetForm();
     },
     onError: (err) => toast.error(err.message || 'Failed to update visit'),
@@ -314,6 +355,57 @@ export const FieldMarketing = () => {
       toast.success('Visit record removed');
     },
   });
+
+  // ── Booster Computed & Handlers ──────────────────────────────────────────
+  const expiringCompetitors = useMemo(() => {
+    return getCompetitorExpiringLeads(visits, 35);
+  }, [visits]);
+
+  const multiStopRouteUrl = useMemo(() => {
+    if (nearbyLibraries.length < 2) return null;
+    return generateMultiStopGoogleMapsRoute(myLocation, nearbyLibraries.slice(0, 5));
+  }, [myLocation, nearbyLibraries]);
+
+  const openConvertModal = (v) => {
+    const cleanPhone = (v.phone || '').replace(/\D/g, '');
+    const defaultEmail = cleanPhone ? `${cleanPhone}@univo.in` : `client_${Date.now()}@univo.in`;
+    setConvertForm({
+      email: defaultEmail,
+      libraryName: v.businessName || '',
+      ownerName: v.ownerName || '',
+      phone: v.phone || '',
+      address: v.address || `${v.city || ''}, ${v.state || ''}`,
+      planName: 'Annual Plan (1 Year)',
+    });
+    setShowConvertModal(v);
+  };
+
+  const handleConvertClientSubmit = async (e) => {
+    e.preventDefault();
+    setConverting(true);
+    try {
+      await restoreOrCreateLibraryClient({
+        email: convertForm.email,
+        libraryName: convertForm.libraryName,
+        ownerName: convertForm.ownerName,
+        phone: convertForm.phone,
+        address: convertForm.address,
+        planName: convertForm.planName,
+      });
+
+      if (showConvertModal && showConvertModal.status !== 'Deal Closed') {
+        await updateVisitStatus(showConvertModal.id, 'Deal Closed');
+        queryClient.invalidateQueries({ queryKey: ['admin_field_visits'] });
+      }
+
+      toast.success(`🎉 Client "${convertForm.libraryName}" onboarded! Active in Library Clients.`);
+      setShowConvertModal(null);
+    } catch (err) {
+      toast.error(err.message || 'Failed to onboard client');
+    } finally {
+      setConverting(false);
+    }
+  };
 
   // Default coordinates: Guna, MP (Madhya Pradesh)
   const DEFAULT_GUNA_COORDS = { latitude: 24.6465, longitude: 77.3188, accuracy: 100, isFallback: true };
@@ -387,7 +479,7 @@ export const FieldMarketing = () => {
     const hasLimit = searchLimit !== '' && Number(searchLimit) > 0;
 
     if (!hasRadius && !hasLimit) {
-      toast.error('Radius (km) ya Number of Places me se kisi ek me entry hona zaroori hai!');
+      toast.error('Please specify either Radius (km) or Number of Places to search!');
       return;
     }
 
@@ -399,8 +491,17 @@ export const FieldMarketing = () => {
 
   // ── Form helpers ───────────────────────────────────────────────────────────
   const resetForm = () => {
-    setForm(initialFormState);
+    const now = new Date();
+    const liveTimeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const liveOutStr = new Date(now.getTime() + 20 * 60000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    setForm({
+      ...initialFormState,
+      checkInTime: liveTimeStr,
+      checkOutTime: liveOutStr,
+    });
     setGpsData(null);
+    setEditingVisit(null);
+    setRevisitTarget(null);
   };
 
   const handlePhotoCapture = async (e) => {
@@ -535,6 +636,7 @@ export const FieldMarketing = () => {
 
   const openReVisit = (visit) => {
     setEditingVisit(null);
+    setRevisitTarget(visit);
     setForm({
       ...initialFormState,
       clientType: visit.clientType || 'Library',
@@ -553,8 +655,15 @@ export const FieldMarketing = () => {
       competitorExpiryDate: visit.competitorExpiryDate || '',
       competitorDuration: visit.competitorDuration || '',
       switchingReason: visit.switchingReason || '',
-      leadPriority: visit.leadPriority || 'Warm',
-      status: 'Follow Up',
+      status: visit.status || 'Follow Up',
+      discussionNotes: '', // Clean notes input for this new re-visit
+      demoGiven: visit.demoGiven || false,
+      followUpDate: visit.followUpDate || '',
+      followUpTime: visit.followUpTime || '',
+      followUpType: visit.followUpType || 'In-Person Re-Visit',
+      nextActionItem: visit.nextActionItem || '',
+      reminderNote: '',
+      photoUrl: null,
       placeId: visit.placeId || null,
       placeName: visit.placeName || visit.businessName || '',
       placeAddress: visit.placeAddress || visit.address || '',
@@ -562,7 +671,7 @@ export const FieldMarketing = () => {
       placeLat: visit.placeLat || null,
       placeLng: visit.placeLng || null,
       checkInTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      checkOutTime: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+      checkOutTime: new Date(Date.now() + 20 * 60000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
     });
     setShowModal(true);
     getCurrentGPSLocation().then((loc) => {
@@ -572,6 +681,7 @@ export const FieldMarketing = () => {
   };
 
   const openEditVisit = (visit) => {
+    setRevisitTarget(null);
     setEditingVisit(visit);
     setForm({
       clientType: visit.clientType || 'Library',
@@ -585,7 +695,6 @@ export const FieldMarketing = () => {
       discussionNotes: visit.discussionNotes || '',
       demoGiven: visit.demoGiven || false,
       status: visit.status || 'Interested',
-      leadPriority: visit.leadPriority || 'Warm',
       personMet: visit.personMet || 'Owner / Director',
       contactPersonName: visit.contactPersonName || '',
       seatCapacity: visit.seatCapacity || '',
@@ -634,11 +743,63 @@ export const FieldMarketing = () => {
       return;
     }
 
+    const now = new Date();
+    const liveTimeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const liveOutStr = new Date(now.getTime() + 20 * 60000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const checkInTime = (form.checkInTime && form.checkInTime.trim()) || liveTimeStr;
+    const checkOutTime = (form.checkOutTime && form.checkOutTime.trim()) || liveOutStr;
+
+    const payload = {
+      ...form,
+      checkInTime,
+      checkOutTime,
+      durationMinutes: Number(form.durationMinutes) || 20,
+    };
+
     if (editingVisit) {
-      editMutation.mutate({ id: editingVisit.id, data: { ...form, location: gpsData } });
+      editMutation.mutate({ id: editingVisit.id, data: { ...payload, location: gpsData || editingVisit.location } });
+    } else if (revisitTarget) {
+      // Archive previous visit state into visitHistory array
+      const previousLog = {
+        visitedAt: revisitTarget.lastVisitedAt || revisitTarget.createdAt || new Date().toISOString(),
+        staffName: revisitTarget.lastStaffName || revisitTarget.staffName || user?.displayName || user?.name || 'Staff',
+        staffId: revisitTarget.lastStaffId || revisitTarget.staffId || user?.uid || user?.id || 'staff',
+        status: revisitTarget.status || 'Interested',
+        discussionNotes: revisitTarget.discussionNotes || '',
+        checkInTime: revisitTarget.checkInTime || '',
+        checkOutTime: revisitTarget.checkOutTime || '',
+        durationMinutes: revisitTarget.durationMinutes || 20,
+        followUpDate: revisitTarget.followUpDate || '',
+        followUpTime: revisitTarget.followUpTime || '',
+        location: revisitTarget.location || null,
+        photoUrl: revisitTarget.photoUrl || '',
+      };
+
+      const updatedHistory = [...(revisitTarget.visitHistory || []), previousLog];
+      const newVisitCount = (revisitTarget.visitCount || updatedHistory.length) + 1;
+
+      editMutation.mutate({
+        id: revisitTarget.id,
+        data: {
+          ...payload,
+          staffId: user?.uid || user?.id || revisitTarget.staffId || 'staff',
+          staffName: user?.displayName || user?.name || revisitTarget.staffName || 'Staff',
+          visitCount: newVisitCount,
+          lastVisitedAt: new Date().toISOString(),
+          lastStaffName: user?.displayName || user?.name || 'Staff',
+          lastStaffId: user?.uid || user?.id || 'staff',
+          visitHistory: updatedHistory,
+          location: gpsData || revisitTarget.location || null,
+          photoUrl: form.photoUrl || revisitTarget.photoUrl || '',
+          updatedAt: new Date().toISOString(),
+        },
+      });
     } else {
       addMutation.mutate({
-        ...form,
+        ...payload,
+        visitCount: 1,
+        visitHistory: [],
+        lastVisitedAt: new Date().toISOString(),
         staffId: user?.uid || user?.id || 'staff',
         staffName: user?.displayName || user?.name || 'Marketing Staff',
         location: gpsData,
@@ -713,13 +874,15 @@ export const FieldMarketing = () => {
   }, [visits, isSuperAdmin, selectedStaffFilter, user, allStaffAndAdmins]);
 
   const filteredVisits = useMemo(() => {
-    const todayStr = new Date().toISOString().split('T')[0];
     const now = new Date();
-    const weekAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7).toISOString();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const todayUtc = now.toISOString().split('T')[0];
+    const todayLocal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const oneWeekAgoMs = now.getTime() - 7 * 24 * 60 * 60 * 1000;
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 
     return baseVisits.filter((v) => {
       const matchSearch =
+        !search.trim() ||
         (v.businessName || '').toLowerCase().includes(search.toLowerCase()) ||
         (v.ownerName || '').toLowerCase().includes(search.toLowerCase()) ||
         (v.phone || '').toLowerCase().includes(search.toLowerCase()) ||
@@ -731,16 +894,142 @@ export const FieldMarketing = () => {
 
       let matchDate = true;
       if (dateFilter === 'today') {
-        matchDate = (v.createdAt || '').startsWith(todayStr);
+        const vDate = v.createdAt ? new Date(v.createdAt) : null;
+        if (vDate && !isNaN(vDate.getTime())) {
+          const vLocal = `${vDate.getFullYear()}-${String(vDate.getMonth() + 1).padStart(2, '0')}-${String(vDate.getDate()).padStart(2, '0')}`;
+          matchDate = (v.createdAt || '').startsWith(todayUtc) || vLocal === todayLocal;
+        } else {
+          matchDate = (v.createdAt || '').startsWith(todayUtc);
+        }
       } else if (dateFilter === 'week') {
-        matchDate = v.createdAt >= weekAgo;
+        const vTime = v.createdAt ? new Date(v.createdAt).getTime() : 0;
+        matchDate = vTime >= oneWeekAgoMs;
       } else if (dateFilter === 'month') {
-        matchDate = v.createdAt >= monthStart;
+        const vTime = v.createdAt ? new Date(v.createdAt).getTime() : 0;
+        matchDate = vTime >= startOfMonth;
       }
 
       return matchSearch && matchStatus && matchDate;
     });
   }, [baseVisits, search, statusFilter, dateFilter]);
+
+  // Dynamic status counts reflecting current search & date filter
+  const statusCounts = useMemo(() => {
+    const counts = {
+      All: 0,
+      'Interested': 0,
+      'Demo Given': 0,
+      'Follow Up': 0,
+      'Deal Closed': 0,
+      'Not Interested': 0,
+    };
+
+    const now = new Date();
+    const todayUtc = now.toISOString().split('T')[0];
+    const todayLocal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const oneWeekAgoMs = now.getTime() - 7 * 24 * 60 * 60 * 1000;
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+    baseVisits.forEach((v) => {
+      const matchSearch =
+        !search.trim() ||
+        (v.businessName || '').toLowerCase().includes(search.toLowerCase()) ||
+        (v.ownerName || '').toLowerCase().includes(search.toLowerCase()) ||
+        (v.phone || '').toLowerCase().includes(search.toLowerCase()) ||
+        (v.staffName || '').toLowerCase().includes(search.toLowerCase()) ||
+        (v.city || '').toLowerCase().includes(search.toLowerCase()) ||
+        (v.discussionNotes || '').toLowerCase().includes(search.toLowerCase());
+
+      if (!matchSearch) return;
+
+      let matchDate = true;
+      if (dateFilter === 'today') {
+        const vDate = v.createdAt ? new Date(v.createdAt) : null;
+        if (vDate && !isNaN(vDate.getTime())) {
+          const vLocal = `${vDate.getFullYear()}-${String(vDate.getMonth() + 1).padStart(2, '0')}-${String(vDate.getDate()).padStart(2, '0')}`;
+          matchDate = (v.createdAt || '').startsWith(todayUtc) || vLocal === todayLocal;
+        } else {
+          matchDate = (v.createdAt || '').startsWith(todayUtc);
+        }
+      } else if (dateFilter === 'week') {
+        const vTime = v.createdAt ? new Date(v.createdAt).getTime() : 0;
+        matchDate = vTime >= oneWeekAgoMs;
+      } else if (dateFilter === 'month') {
+        const vTime = v.createdAt ? new Date(v.createdAt).getTime() : 0;
+        matchDate = vTime >= startOfMonth;
+      }
+
+      if (!matchDate) return;
+
+      counts.All += 1;
+      if (v.status && counts[v.status] !== undefined) {
+        counts[v.status] += 1;
+      }
+    });
+
+    return counts;
+  }, [baseVisits, search, dateFilter]);
+
+  // Dynamic date counts reflecting current search & status filter
+  const dateCounts = useMemo(() => {
+    const counts = { all: 0, today: 0, week: 0, month: 0 };
+    const now = new Date();
+    const todayUtc = now.toISOString().split('T')[0];
+    const todayLocal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const oneWeekAgoMs = now.getTime() - 7 * 24 * 60 * 60 * 1000;
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+    baseVisits.forEach((v) => {
+      const matchSearch =
+        !search.trim() ||
+        (v.businessName || '').toLowerCase().includes(search.toLowerCase()) ||
+        (v.ownerName || '').toLowerCase().includes(search.toLowerCase()) ||
+        (v.phone || '').toLowerCase().includes(search.toLowerCase()) ||
+        (v.staffName || '').toLowerCase().includes(search.toLowerCase()) ||
+        (v.city || '').toLowerCase().includes(search.toLowerCase()) ||
+        (v.discussionNotes || '').toLowerCase().includes(search.toLowerCase());
+
+      const matchStatus = statusFilter === 'All' || v.status === statusFilter;
+
+      if (!matchSearch || !matchStatus) return;
+
+      counts.all += 1;
+
+      const vDate = v.createdAt ? new Date(v.createdAt) : null;
+      const vTime = vDate && !isNaN(vDate.getTime()) ? vDate.getTime() : 0;
+
+      if (vDate && !isNaN(vDate.getTime())) {
+        const vLocal = `${vDate.getFullYear()}-${String(vDate.getMonth() + 1).padStart(2, '0')}-${String(vDate.getDate()).padStart(2, '0')}`;
+        if ((v.createdAt || '').startsWith(todayUtc) || vLocal === todayLocal) {
+          counts.today += 1;
+        }
+      } else if ((v.createdAt || '').startsWith(todayUtc)) {
+        counts.today += 1;
+      }
+
+      if (vTime >= oneWeekAgoMs) {
+        counts.week += 1;
+      }
+      if (vTime >= startOfMonth) {
+        counts.month += 1;
+      }
+    });
+
+    return counts;
+  }, [baseVisits, search, statusFilter]);
+
+  const isFilterActive =
+    search.trim() !== '' ||
+    statusFilter !== 'All' ||
+    dateFilter !== 'all' ||
+    selectedStaffFilter !== 'All';
+
+  const handleClearAllFilters = () => {
+    setSearch('');
+    setStatusFilter('All');
+    setDateFilter('all');
+    setSelectedStaffFilter('All');
+  };
 
   // Stats
   const totalVisitsCount = baseVisits.length;
@@ -772,12 +1061,15 @@ export const FieldMarketing = () => {
   // Visit count per place or business name (Visit #1, Visit #2, etc.)
   const getVisitNumber = useCallback(
     (visit) => {
+      if (!visit) return 1;
+      const inDocCount = Math.max(Number(visit.visitCount) || 1, (Array.isArray(visit.visitHistory) ? visit.visitHistory.length : 0) + 1);
       const bName = (visit.businessName || '').trim().toLowerCase();
       const placeVisits = visits
         .filter((v) => (visit.placeId && v.placeId === visit.placeId) || (bName && (v.businessName || '').trim().toLowerCase() === bName))
         .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
       const idx = placeVisits.findIndex((v) => v.id === visit.id);
-      return idx >= 0 ? idx + 1 : 1;
+      const legacyCount = idx >= 0 ? idx + 1 : 1;
+      return Math.max(inDocCount, legacyCount);
     },
     [visits]
   );
@@ -891,6 +1183,38 @@ export const FieldMarketing = () => {
         }
       />
 
+      {/* ═══ BOOSTER BANNER: Competitor Expiry Radar ═══ */}
+      {expiringCompetitors.length > 0 && (
+        <div className="bg-gradient-to-r from-rose-50 via-amber-50 to-orange-50 rounded-2xl border border-rose-200/90 p-4 sm:p-5 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-rose-600/25">
+              <Target size={22} className="animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] font-black uppercase tracking-wider bg-rose-200/80 text-rose-900 px-2 py-0.5 rounded-full">
+                  🔥 Hot Switch Targets
+                </span>
+                <span className="text-xs font-black text-rose-700">
+                  {expiringCompetitors.length} Libraries with Competitor Software Expiring Soon
+                </span>
+              </div>
+              <p className="text-xs text-slate-700 mt-1">
+                Competitor software for these libraries is expiring soon. Send a proposal on WhatsApp or schedule a visit now to switch them to Univo!
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setShowRadarModal(true)}
+            className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow-xs transition shrink-0 cursor-pointer flex items-center gap-1.5"
+          >
+            <Zap size={14} />
+            <span>Open Expiry Radar ({expiringCompetitors.length})</span>
+          </button>
+        </div>
+      )}
+
       {/* ═══ SECTION A: Auto-Find Nearest Libraries & Gyms ═══ */}
       <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
         <div className="p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100">
@@ -917,30 +1241,46 @@ export const FieldMarketing = () => {
             </div>
           </div>
 
-          {/* Simple 2-Way Category Switcher: Libraries vs Gyms */}
-          <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl self-start sm:self-auto border border-slate-200">
-            <button
-              type="button"
-              onClick={() => handleCategorySwitch('library')}
-              className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                activeCategory === 'library'
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <span>📚 Study Libraries</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleCategorySwitch('gym')}
-              className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
-                activeCategory === 'gym'
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <span>🏋️ Gyms</span>
-            </button>
+          <div className="flex items-center gap-2 flex-wrap self-start sm:self-auto">
+            {multiStopRouteUrl && (
+              <a
+                href={multiStopRouteUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+                title="Open turn-by-turn route for top nearby places in Google Maps"
+              >
+                <Navigation size={13} />
+                <span>Smart Multi-Stop Route</span>
+                <ExternalLink size={10} />
+              </a>
+            )}
+
+            {/* Simple 2-Way Category Switcher: Libraries vs Gyms */}
+            <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
+              <button
+                type="button"
+                onClick={() => handleCategorySwitch('library')}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  activeCategory === 'library'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>📚 Study Libraries</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleCategorySwitch('gym')}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                  activeCategory === 'gym'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <span>🏋️ Gyms</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1148,14 +1488,33 @@ export const FieldMarketing = () => {
 
                           {/* Visit History Badge */}
                           {lastVisit ? (
-                            <div className="p-2 bg-emerald-50/80 rounded-lg border border-emerald-200/60 text-[11px]">
-                              <span className="font-bold text-emerald-800">
-                                ✅ Visited {placeHistory.length}x • Last by {lastVisit.staffName}
-                              </span>
-                              <p className="text-emerald-700 mt-0.5 truncate">
-                                {lastVisit.status} — "{(lastVisit.discussionNotes || '').slice(0, 60)}"
-                              </p>
-                            </div>
+                            (() => {
+                              const dt = formatDateTime(lastVisit.createdAt);
+                              const visitTime = dt.time || lastVisit.checkInTime || '';
+                              return (
+                                <div className="p-2.5 bg-emerald-50/80 rounded-xl border border-emerald-200/70 text-[11px] space-y-1.5">
+                                  <div className="flex items-center justify-between gap-1 flex-wrap">
+                                    <span className="font-bold text-emerald-900">
+                                      ✅ Visited {placeHistory.length}x • Last by {lastVisit.staffName}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
+                                    <span className="bg-emerald-100/90 text-emerald-900 px-2 py-0.5 rounded-md border border-emerald-200 font-extrabold inline-flex items-center gap-1">
+                                      <span>📅 {dt.date}</span>
+                                      {visitTime && <span>• 🕒 {visitTime}</span>}
+                                    </span>
+                                    <span className="bg-white text-emerald-800 px-1.5 py-0.5 rounded-md border border-emerald-200 font-bold">
+                                      {lastVisit.status}
+                                    </span>
+                                  </div>
+                                  {lastVisit.discussionNotes && (
+                                    <p className="text-emerald-800 text-[10px] italic leading-tight line-clamp-2">
+                                      "{lastVisit.discussionNotes}"
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            })()
                           ) : (
                             <p className="text-[11px] text-slate-400 italic">Not visited yet</p>
                           )}
@@ -1202,7 +1561,7 @@ export const FieldMarketing = () => {
                   Type a {activeCategory === 'gym' ? 'gym' : 'library'} name or city above and click "Find Nearest"
                 </p>
                 <p className="text-[11px] text-slate-400">
-                  Search box me type karne ke baad hi nearest results dikhenge.
+                  Results will appear after you search.
                 </p>
               </div>
             )}
@@ -1286,40 +1645,6 @@ export const FieldMarketing = () => {
         </div>
       )}
 
-      {/* ═══ Stat Cards ═══ */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          title={isSuperAdmin ? 'Total Field Visits' : 'My Total Visits'}
-          value={totalVisitsCount}
-          subtitle="All on-site library meetings"
-          icon={Building2}
-          color="blue"
-        />
-        <StatCard
-          title={isSuperAdmin ? 'Demos Given' : 'My Demos'}
-          value={demosGivenCount}
-          subtitle="Software demo shown"
-          icon={Navigation}
-          color="purple"
-        />
-        <StatCard
-          title="Follow-ups Pending"
-          value={followUpsCount}
-          subtitle="Libraries needing callback"
-          icon={AlertCircle}
-          color="amber"
-        />
-        <StatCard
-          title="Deals Closed"
-          value={dealsClosedCount}
-          subtitle="Subscribed clients"
-          icon={CheckCircle2}
-          color="emerald"
-          trend={`${dealsClosedCount} Won`}
-          trendPositive={true}
-        />
-      </div>
-
       {/* ═══ Admin & Staff Performance Panel ═══ */}
       {isSuperAdmin && allStaffAndAdmins.length > 0 && (
         <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-3">
@@ -1333,7 +1658,7 @@ export const FieldMarketing = () => {
                   Marketing Team & Admin Performance
                 </h3>
                 <p className="text-[11px] text-slate-500">
-                  Click any staff or admin to filter their visits (Admin ki entries bhi count hongi)
+                  Click any staff or admin to filter their visits (Admin entries included)
                 </p>
               </div>
             </div>
@@ -1403,396 +1728,476 @@ export const FieldMarketing = () => {
       )}
 
       {/* ═══ Search, Filters & Controls ═══ */}
-      <div className="flex flex-col lg:flex-row items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs">
-        <div className="flex flex-col sm:flex-row items-center gap-3 w-full lg:w-auto flex-1">
-          <div className="w-full sm:w-80">
-            <SearchBar
-              value={search}
-              onChange={setSearch}
-              placeholder="Search by library, owner, phone, city, notes..."
-            />
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 sm:p-5 space-y-3.5">
+        {/* Row 1: Search + Staff Filter + Results Summary & Clear */}
+        <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 flex-1">
+            <div className="flex-1 min-w-[220px]">
+              <SearchBar
+                value={search}
+                onChange={setSearch}
+                placeholder="Search by library, owner, phone, city, notes..."
+              />
+            </div>
+
+            {isSuperAdmin && allStaffAndAdmins.length > 0 && (
+              <div className="relative shrink-0 sm:w-64">
+                <select
+                  value={selectedStaffFilter}
+                  onChange={(e) => setSelectedStaffFilter(e.target.value)}
+                  className={`w-full px-3.5 py-2.5 border rounded-xl text-xs font-bold outline-none focus:border-blue-600 transition cursor-pointer appearance-none pr-8 ${
+                    selectedStaffFilter !== 'All'
+                      ? 'bg-blue-50 border-blue-400 text-blue-900 ring-2 ring-blue-500/10'
+                      : 'bg-slate-50 border-slate-200 text-slate-800'
+                  }`}
+                >
+                  <option value="All">👥 All Staff & Admins ({visits.length})</option>
+                  {allStaffAndAdmins.map((s) => {
+                    const sCount = visits.filter(
+                      (v) => v.staffId === s.id || (v.staffName && v.staffName.toLowerCase() === s.name.toLowerCase())
+                    ).length;
+                    return (
+                      <option key={s.id} value={s.id}>
+                        {s.isAdmin ? '👑 ' : '👤 '}{s.name} ({sCount})
+                      </option>
+                    );
+                  })}
+                </select>
+                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              </div>
+            )}
           </div>
 
-          {isSuperAdmin && allStaffAndAdmins.length > 0 && (
-            <select
-              value={selectedStaffFilter}
-              onChange={(e) => setSelectedStaffFilter(e.target.value)}
-              className="w-full sm:w-auto px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none focus:border-blue-600 cursor-pointer"
-            >
-              <option value="All">All Staff & Admins ({visits.length})</option>
-              {allStaffAndAdmins.map((s) => {
-                const sCount = visits.filter(
-                  (v) => v.staffId === s.id || (v.staffName && v.staffName.toLowerCase() === s.name.toLowerCase())
-                ).length;
+          {/* Right side: Showing X of Y + Reset button */}
+          <div className="flex items-center justify-between sm:justify-end gap-2.5 shrink-0 pt-1 md:pt-0 border-t md:border-t-0 border-slate-100">
+            <span className="text-xs font-bold text-slate-500">
+              Showing <strong className="text-slate-900">{filteredVisits.length}</strong> of {baseVisits.length} visits
+            </span>
+            {isFilterActive && (
+              <button
+                type="button"
+                onClick={handleClearAllFilters}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold rounded-xl border border-rose-200 transition cursor-pointer shadow-2xs"
+                title="Reset all filters"
+              >
+                <RotateCcw size={12} />
+                <span>Reset Filters</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="h-px bg-slate-100" />
+
+        {/* Row 2: Date Filters & Status Filters */}
+        <div className="space-y-2.5">
+          {/* Date Filters */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 shrink-0 flex items-center gap-1">
+              <Calendar size={11} className="text-slate-400" /> Date:
+            </span>
+            <div className="inline-flex items-center bg-slate-100/90 p-1 rounded-xl gap-1">
+              {DATE_FILTERS.map((df) => {
+                const isSelected = dateFilter === df.id;
+                const count = dateCounts[df.id] ?? 0;
                 return (
-                  <option key={s.id} value={s.id}>
-                    {s.isAdmin ? '👑 ' : ''}{s.name} ({sCount})
-                  </option>
+                  <button
+                    key={df.id}
+                    type="button"
+                    onClick={() => setDateFilter(df.id)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                      isSelected
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                    }`}
+                  >
+                    <span>{df.label}</span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded-md font-black ${
+                        isSelected ? 'bg-indigo-700/90 text-white' : 'bg-slate-200/90 text-slate-600'
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
                 );
               })}
-            </select>
-          )}
-        </div>
+            </div>
+          </div>
 
-        <div className="flex items-center gap-1.5 overflow-x-auto w-full lg:w-auto pb-1 lg:pb-0 flex-wrap">
-          {/* Date filter */}
-          {DATE_FILTERS.map((df) => (
-            <button
-              key={df.id}
-              onClick={() => setDateFilter(df.id)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer ${
-                dateFilter === df.id
-                  ? 'bg-indigo-600 text-white shadow-xs'
-                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-              }`}
-            >
-              {df.label}
-            </button>
-          ))}
-          <span className="text-slate-300 mx-1">|</span>
-          {/* Status filter */}
-          {['All', 'Interested', 'Demo Given', 'Follow Up', 'Deal Closed'].map((st) => (
-            <button
-              key={st}
-              onClick={() => setStatusFilter(st)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap cursor-pointer ${
-                statusFilter === st
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              {st}
-              {st === 'All' && ` (${baseVisits.length})`}
-              {st === 'Deal Closed' && ` (${dealsClosedCount})`}
-            </button>
-          ))}
+          {/* Status Filters */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 shrink-0 flex items-center gap-1">
+              <Filter size={11} className="text-slate-400" /> Status:
+            </span>
+            <div className="inline-flex items-center bg-slate-100/90 p-1 rounded-xl gap-1 overflow-x-auto">
+              {STATUS_FILTER_OPTIONS.map((st) => {
+                const isSelected = statusFilter === st.id;
+                const count = statusCounts[st.id] ?? 0;
+                return (
+                  <button
+                    key={st.id}
+                    type="button"
+                    onClick={() => setStatusFilter(st.id)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                      isSelected
+                        ? st.activeClass || 'bg-blue-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                    }`}
+                  >
+                    <span>{st.label}</span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded-md font-black ${
+                        isSelected ? 'bg-black/25 text-white' : 'bg-slate-200/90 text-slate-600'
+                      }`}
+                    >
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* ═══ SECTION C: Visits Table ═══ */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-slate-50/80 border-b border-slate-100 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                <th className="px-5 py-3.5">Client & Scale</th>
-                <th className="px-5 py-3.5">Contact & Met</th>
-                <th className="px-5 py-3.5">Current Software</th>
-                <th className="px-5 py-3.5">Discussion & Next Action</th>
-                <th className="px-5 py-3.5">Staff & GPS</th>
-                <th className="px-5 py-3.5">Status</th>
-                <th className="px-5 py-3.5 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-sm">
-              {filteredVisits.length > 0 ? (
-                filteredVisits.map((visit) => {
-                  const visitNum = getVisitNumber(visit);
-                  return (
-                    <tr key={visit.id} className="hover:bg-slate-50/70 transition-colors">
-                      {/* Business Name & Scale */}
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-3">
-                          {visit.photoUrl ? (
-                            <div
-                              onClick={() => setPreviewPhotoUrl(visit.photoUrl)}
-                              className="relative w-10 h-10 rounded-xl overflow-hidden border border-slate-200 cursor-pointer shrink-0 group shadow-2xs"
-                              title="Click to view library photo"
-                            >
-                              <img src={visit.photoUrl} alt="" className="w-full h-full object-cover group-hover:scale-110 transition duration-200" />
-                              <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
-                                <Camera size={14} className="text-white" />
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center font-bold text-xs shrink-0">
-                              <Building2 size={16} />
-                            </div>
-                          )}
+      {/* ═══ SECTION C: Visits Card Grid ═══ */}
+      <div>
+        {/* Section header row */}
+        <div className="flex items-center justify-between mb-3 px-1">
+          <p className="text-xs font-black text-slate-500 uppercase tracking-widest">
+            {filteredVisits.length} Visit{filteredVisits.length !== 1 ? 's' : ''} Found
+          </p>
+        </div>
 
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <p className="font-bold text-slate-900 truncate max-w-xs">
-                                {visit.businessName}
-                              </p>
-                              {visit.leadPriority === 'Hot' && (
-                                <span className="text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-200 px-1.5 py-0.2 rounded-md">
-                                  🔥 Hot
-                                </span>
-                              )}
-                            </div>
-                            <span className="text-[11px] text-slate-400 font-semibold flex items-center gap-1.5 mt-0.5">
-                              <span>{visit.clientType} • {visit.city || 'City'}</span>
-                              {visit.seatCapacity && (
-                                <span className="text-[10px] text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded font-bold">
-                                  🪑 {visit.seatCapacity}
-                                </span>
-                              )}
-                              {visitNum && visitNum > 1 && (
-                                <span className="text-blue-600 font-bold">• #{visitNum}</span>
-                              )}
-                            </span>
-                          </div>
+        {filteredVisits.length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            {filteredVisits.map((visit) => {
+              const visitNum = getVisitNumber(visit);
+              const isAdm =
+                (visit.staffName || '').toLowerCase().includes('admin') ||
+                (visit.staffName || '').toLowerCase().includes('owner') ||
+                String(visit.staffId || '').toLowerCase().includes('admin');
+              const auth = evaluateVisitAuthenticity(visit);
+              const sync = evaluateSyncDelay(visit.checkInTime, visit.createdAt);
+              const entryTime = formatDateTime(visit.createdAt);
+
+              return (
+                <div
+                  key={visit.id}
+                  className={`bg-white rounded-2xl border shadow-xs hover:shadow-md transition-all duration-200 overflow-hidden flex flex-col ${
+                    visit.status === 'Deal Closed'
+                      ? 'border-emerald-200 ring-1 ring-emerald-100'
+                      : 'border-slate-200/80'
+                  }`}
+                >
+                  {/* Card Top: Photo + Name + Status */}
+                  <div className="p-4 flex items-start gap-3">
+                    {/* Avatar / Photo */}
+                    {visit.photoUrl ? (
+                      <div
+                        onClick={() => setPreviewPhotoUrl(visit.photoUrl)}
+                        className="relative w-14 h-14 rounded-xl overflow-hidden border border-slate-200 cursor-pointer shrink-0 group shadow-xs"
+                        title="Click to view photo"
+                      >
+                        <img src={visit.photoUrl} alt="" className="w-full h-full object-cover group-hover:scale-110 transition duration-200" />
+                        <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
+                          <Camera size={16} className="text-white" />
                         </div>
-                      </td>
+                      </div>
+                    ) : (
+                      <div className={`w-14 h-14 rounded-xl flex items-center justify-center font-black text-lg shrink-0 shadow-xs ${
+                        visit.status === 'Deal Closed'
+                          ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                          : 'bg-blue-50 text-blue-600 border border-blue-100'
+                      }`}>
+                        <Building2 size={22} />
+                      </div>
+                    )}
 
-                      {/* Owner & Person Met */}
-                      <td className="px-5 py-4 text-xs text-slate-600">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-bold text-slate-800">{visit.ownerName || 'Owner'}</span>
-                          {visit.personMet && (
-                            <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
-                              {visit.personMet.split(' ')[0]}
-                            </span>
-                          )}
-                        </div>
-
-                        {visit.phone && (
-                          <div className="flex items-center gap-2 mt-1">
-                            <a href={`tel:${visit.phone}`} className="text-blue-600 hover:text-blue-800" title="Call">
-                              <PhoneCall size={12} />
-                            </a>
-                            <a
-                              href={`https://wa.me/91${visit.phone.replace(/\D/g, '')}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-emerald-600 hover:text-emerald-800"
-                              title="WhatsApp"
-                            >
-                              <MessageCircle size={12} />
-                            </a>
-                            <span className="text-slate-500 text-[11px]">{visit.phone}</span>
-                          </div>
-                        )}
-                        {visit.secondaryPhone && (
-                          <span className="text-[10px] text-slate-400 block mt-0.5">
-                            Alt: {visit.secondaryPhone}
-                          </span>
-                        )}
-                      </td>
-
-                      {/* Current Software & Competitor */}
-                      <td className="px-5 py-4 text-xs whitespace-nowrap">
-                        {visit.currentSoftwareType === 'Competitor Software' ? (
-                          <div className="space-y-0.5">
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-lg">
-                              💻 {visit.competitorName || 'Competitor App'}
-                            </span>
-                            {(visit.competitorExpiryDate || visit.competitorDuration) && (
-                              <p className="text-[10px] text-amber-700 font-semibold">
-                                Exp: {visit.competitorExpiryDate || visit.competitorDuration}
-                              </p>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-slate-500 text-[11px] font-medium">
-                            {visit.currentSoftwareType || '📒 Manual Register'}
-                          </span>
-                        )}
-                      </td>
-
-                      {/* Discussion, Follow-up & Reminder */}
-                      <td className="px-5 py-4 max-w-xs text-xs">
-                        <p className="text-slate-700 line-clamp-2 leading-relaxed">
-                          {visit.discussionNotes || 'No notes.'}
+                    {/* Name + type + tags */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-1.5">
+                        <p className="font-black text-slate-900 text-sm leading-tight truncate">
+                          {visit.businessName}
                         </p>
+                        {/* Status dropdown button */}
+                        <div className="relative shrink-0">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setStatusDropdownId(statusDropdownId === visit.id ? null : visit.id);
+                            }}
+                            className="flex items-center gap-0.5 cursor-pointer"
+                          >
+                            <Badge variant={getStatusBadgeVariant(visit.status)} size="sm">
+                              {visit.status}
+                            </Badge>
+                            <ChevronDown size={11} className="text-slate-400" />
+                          </button>
+                          {statusDropdownId === visit.id && (
+                            <div
+                              className="absolute z-30 top-full right-0 mt-1 bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 w-52"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {VISIT_STATUSES.map((s) => (
+                                <button
+                                  key={s.id}
+                                  onClick={() => statusMutation.mutate({ id: visit.id, status: s.id })}
+                                  className={`w-full text-left px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
+                                    visit.status === s.id
+                                      ? 'bg-blue-50 text-blue-700'
+                                      : 'hover:bg-slate-50 text-slate-700'
+                                  }`}
+                                >
+                                  {s.label}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
 
-                        {visit.demoGiven && (
-                          <span className="inline-flex items-center gap-1 mt-1 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded">
-                            <Check size={10} /> Demo Given
+                      <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                        <span className="text-[11px] text-slate-400 font-semibold">
+                          {visit.clientType} · {visit.city || 'City'}
+                        </span>
+                        {visit.seatCapacity && (
+                          <span className="text-[10px] text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded font-bold">
+                            🪑 {visit.seatCapacity}
                           </span>
                         )}
-
-                        {visit.followUpDate && (
-                          <div className="mt-1.5 p-1.5 bg-amber-50/90 rounded-lg border border-amber-200/80">
-                            <p className="text-[10px] font-bold text-amber-900">
-                              ⏰ {visit.followUpDate} {visit.followUpTime ? `@ ${visit.followUpTime}` : ''}
-                            </p>
-                            {visit.nextActionItem && (
-                              <p className="text-[10px] text-amber-800 font-semibold line-clamp-1">
-                                🎯 {visit.nextActionItem}
-                              </p>
-                            )}
-                            {visit.reminderNote && (
-                              <p className="text-[9px] text-slate-600 italic line-clamp-1">
-                                📝 {visit.reminderNote}
-                              </p>
-                            )}
-                          </div>
+                        {visitNum > 1 ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-black text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">
+                            <RotateCcw size={10} className="stroke-[2.5]" />
+                            Re-Visit #{visitNum}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                            Visit #1
+                          </span>
                         )}
-                      </td>
+                      </div>
+                    </div>
+                  </div>
 
-                      {/* Staff & Exact Timestamp */}
-                      <td className="px-5 py-4 text-xs whitespace-nowrap">
-                        {(() => {
-                          const isAdm =
-                            (visit.staffName || '').toLowerCase().includes('admin') ||
-                            (visit.staffName || '').toLowerCase().includes('owner') ||
-                            String(visit.staffId || '').toLowerCase().includes('admin');
-                          return (
-                            <div className="flex items-center gap-2">
-                              <div
-                                className={`w-7 h-7 rounded-lg font-extrabold text-xs flex items-center justify-center shrink-0 shadow-2xs ${
-                                  isAdm
-                                    ? 'bg-amber-100 text-amber-900 border border-amber-300'
-                                    : 'bg-blue-100 text-blue-800'
-                                }`}
-                              >
-                                {isAdm ? (
-                                  <Crown size={14} className="text-amber-700" />
-                                ) : (
-                                  (visit.staffName || 'S').substring(0, 1).toUpperCase()
-                                )}
-                              </div>
-                              <div>
-                                <div className="font-bold text-slate-900 flex items-center gap-1.5">
-                                  <span>{visit.staffName || 'Marketing Rep'}</span>
-                                  {isAdm && (
-                                    <span className="text-[9px] font-black uppercase tracking-wider bg-amber-100 text-amber-900 border border-amber-300 px-1 py-0.2 rounded">
-                                      Admin
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="text-[11px] font-semibold text-slate-500 flex items-center gap-1 mt-0.5">
-                                  <span>📅 {formatDateTime(visit.createdAt).date}</span>
-                                  {formatDateTime(visit.createdAt).time && (
-                                    <span className="text-blue-600 font-bold">• 🕒 {formatDateTime(visit.createdAt).time}</span>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })()}
+                  {/* Divider */}
+                  <div className="h-px bg-slate-100 mx-4" />
 
-                        {visit.checkInTime && (
-                          <div className="text-[10px] text-slate-500 mt-1 pl-9">
-                            ⏱️ In: <span className="font-semibold text-slate-700">{visit.checkInTime}</span>
-                            {visit.checkOutTime ? <> - Out: <span className="font-semibold text-slate-700">{visit.checkOutTime}</span></> : ''}
-                          </div>
+                  {/* Contact Row */}
+                  <div className="px-4 py-3 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-slate-800 truncate">
+                        {visit.ownerName || 'Owner'}
+                        {visit.personMet && (
+                          <span className="ml-1.5 text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                            {visit.personMet.split(' ')[0]}
+                          </span>
                         )}
+                      </p>
+                      {visit.phone && (
+                        <p className="text-[11px] text-slate-500 mt-0.5">{visit.phone}</p>
+                      )}
+                    </div>
 
-                        <div className="pl-9 mt-1">
-                          {visit.location ? (
-                            <a
-                              href={visit.location.mapsUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200"
-                            >
-                              <MapPin size={10} /> GPS Verified (±{visit.location.accuracy || 10}m)
-                            </a>
-                          ) : (
-                            <span className="text-[10px] text-slate-400 italic block">No GPS</span>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Status (Inline Changeable) */}
-                      <td className="px-5 py-4 whitespace-nowrap relative">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setStatusDropdownId(statusDropdownId === visit.id ? null : visit.id);
-                          }}
-                          className="cursor-pointer flex items-center gap-1"
+                    {visit.phone && (
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <a
+                          href={`tel:${visit.phone}`}
+                          className="w-7 h-7 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 hover:bg-blue-100 transition"
+                          title="Call"
                         >
-                          <Badge variant={getStatusBadgeVariant(visit.status)} size="sm">
-                            {visit.status}
-                          </Badge>
-                          <ChevronDown size={12} className="text-slate-400" />
-                        </button>
+                          <PhoneCall size={12} />
+                        </a>
+                        <a
+                          href={`https://wa.me/91${visit.phone.replace(/\D/g, '')}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-7 h-7 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 hover:bg-emerald-100 transition"
+                          title="WhatsApp"
+                        >
+                          <MessageCircle size={12} />
+                        </a>
+                      </div>
+                    )}
+                  </div>
 
-                        {statusDropdownId === visit.id && (
-                          <div
-                            className="absolute z-20 top-full left-2 mt-1 bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 w-48"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            {VISIT_STATUSES.map((s) => (
-                              <button
-                                key={s.id}
-                                onClick={() => statusMutation.mutate({ id: visit.id, status: s.id })}
-                                className={`w-full text-left px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
-                                  visit.status === s.id
-                                    ? 'bg-blue-50 text-blue-700'
-                                    : 'hover:bg-slate-50 text-slate-700'
-                                }`}
-                              >
-                                {s.label}
-                              </button>
-                            ))}
-                          </div>
+                  {/* Software + Notes */}
+                  <div className="px-4 pb-3 space-y-2">
+                    {/* Current software */}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {visit.currentSoftwareType === 'Competitor Software' ? (
+                        <>
+                          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-lg">
+                            💻 {visit.competitorName || 'Competitor App'}
+                          </span>
+                          {(visit.competitorExpiryDate || visit.competitorDuration) && (
+                            <span className="text-[10px] text-amber-700 font-semibold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                              Exp: {visit.competitorExpiryDate || visit.competitorDuration}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-[10px] text-slate-500 font-medium bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
+                          {visit.currentSoftwareType || '📒 Manual Register'}
+                        </span>
+                      )}
+                      {visit.demoGiven && (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                          <Check size={9} /> Demo Given
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Discussion notes */}
+                    {visit.discussionNotes && (
+                      <p className="text-[11px] text-slate-600 line-clamp-2 leading-relaxed bg-slate-50 rounded-lg px-2.5 py-2 border border-slate-100">
+                        "{visit.discussionNotes}"
+                      </p>
+                    )}
+
+                    {/* Follow-up */}
+                    {visit.followUpDate && (
+                      <div className="p-2 bg-amber-50 rounded-lg border border-amber-200">
+                        <p className="text-[10px] font-bold text-amber-900">
+                          ⏰ Follow-up: {visit.followUpDate}{visit.followUpTime ? ` @ ${visit.followUpTime}` : ''}
+                        </p>
+                        {visit.nextActionItem && (
+                          <p className="text-[10px] text-amber-800 font-semibold line-clamp-1 mt-0.5">
+                            🎯 {visit.nextActionItem}
+                          </p>
                         )}
-                      </td>
+                      </div>
+                    )}
+                  </div>
 
-                      {/* Actions */}
-                      <td className="px-5 py-4 text-right whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            onClick={() => setSelectedVisit(visit)}
-                            className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-lg transition cursor-pointer"
-                            title="Inspect"
-                          >
-                            Inspect
-                          </button>
-                          {hasPermission('marketing', 'create') && (
-                            <button
-                              onClick={() => openEditVisit(visit)}
-                              className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition cursor-pointer"
-                              title="Edit"
-                            >
-                              <Edit3 size={13} />
-                            </button>
-                          )}
-                          {hasPermission('marketing', 'create') && (
-                            <button
-                              onClick={() => openReVisit(visit)}
-                              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
-                              title="Re-Visit"
-                            >
-                              <RotateCcw size={13} />
-                            </button>
-                          )}
-                          {hasPermission('marketing', 'delete') && (
-                            <button
-                              onClick={() => {
-                                if (window.confirm(`Delete visit record for "${visit.businessName}"?`)) {
-                                  deleteMutation.mutate(visit.id);
-                                }
-                              }}
-                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                              title="Delete"
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          )}
+                  {/* Divider */}
+                  <div className="h-px bg-slate-100 mx-4" />
+
+                  {/* Entry Time & GPS Row */}
+                  <div className="px-4 py-2.5 bg-slate-50/60 flex items-center justify-between gap-2 flex-wrap">
+                    {/* Staff + entry time */}
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <div className={`w-6 h-6 rounded-md font-black text-xs flex items-center justify-center shrink-0 ${
+                        isAdm ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-blue-100 text-blue-800'
+                      }`}>
+                        {isAdm ? <Crown size={12} className="text-amber-700" /> : (visit.staffName || 'S').substring(0, 1).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-bold text-slate-700 truncate">
+                          {visit.staffName || 'Marketing Rep'}
+                          {isAdm && <span className="ml-1 text-[8px] uppercase bg-amber-100 text-amber-800 px-1 rounded">Admin</span>}
+                        </p>
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <span className="text-[8px] font-bold uppercase text-blue-500">
+                            {visit.visitCount > 1 || (visit.visitHistory && visit.visitHistory.length > 0) ? 'Latest:' : 'Entry:'}
+                          </span>
+                          <strong className="text-[10px] font-black text-blue-700">
+                            {visit.lastVisitedAt ? formatDateTime(visit.lastVisitedAt).time : entryTime.time}
+                          </strong>
+                          <span className="text-[9px] text-slate-400">
+                            ({visit.lastVisitedAt ? formatDateTime(visit.lastVisitedAt).date : entryTime.date})
+                          </span>
                         </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              ) : (
-                <tr>
-                  <td colSpan={7} className="p-8">
-                    <EmptyState
-                      icon={Navigation}
-                      title="No visits found"
-                      description="Try adjusting your filters, or click 'Log Visit' to record an on-site visit."
-                    />
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+                      </div>
+                    </div>
+
+                    {/* GPS + sync */}
+                    <div className="flex items-center gap-1 flex-wrap">
+                      <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border ${sync.badgeClass}`}>
+                        {sync.label}
+                      </span>
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-black border inline-flex items-center gap-0.5 ${auth.badgeClass}`}>
+                        {auth.isGenuine ? <ShieldCheck size={9} className="text-emerald-700" /> : <ShieldAlert size={9} />}
+                        {auth.statusText}
+                      </span>
+                      {visit.location ? (
+                        <a
+                          href={visit.location.mapsUrl || `https://www.google.com/maps?q=${visit.location.latitude},${visit.location.longitude}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-0.5 text-[9px] font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200"
+                        >
+                          <MapPin size={9} /> GPS
+                        </a>
+                      ) : (
+                        <span className="text-[9px] text-rose-500 font-bold">No GPS ⚠️</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Action buttons */}
+                  <div className="px-4 py-3 border-t border-slate-100 flex items-center gap-1.5 flex-wrap">
+
+                    <button
+                      onClick={() => setSelectedVisit(visit)}
+                      className="flex-1 min-w-0 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold rounded-xl transition cursor-pointer flex items-center justify-center gap-1"
+                    >
+                      Inspect
+                    </button>
+                    {hasPermission('marketing', 'create') && (
+                      <button
+                        onClick={() => openEditVisit(visit)}
+                        className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition cursor-pointer"
+                        title="Edit"
+                      >
+                        <Edit3 size={14} />
+                      </button>
+                    )}
+                    {hasPermission('marketing', 'create') && (
+                      <button
+                        onClick={() => openReVisit(visit)}
+                        className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition cursor-pointer"
+                        title="Re-Visit"
+                      >
+                        <RotateCcw size={14} />
+                      </button>
+                    )}
+                    {hasPermission('marketing', 'delete') && (
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Delete visit record for "${visit.businessName}"?`)) {
+                            deleteMutation.mutate(visit.id);
+                          }
+                        }}
+                        className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer"
+                        title="Delete"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-10">
+            <EmptyState
+              icon={Navigation}
+              title="No visits found"
+              description="Try adjusting your filters, or click 'Log Visit' to record an on-site visit."
+            />
+          </div>
+        )}
       </div>
 
-      {/* ═══ Log / Edit Visit Modal ═══ */}
+
+      {/* ═══ Log / Edit / Re-Visit Modal ═══ */}
       <Modal
         isOpen={showModal}
-        onClose={() => { setShowModal(false); setEditingVisit(null); }}
-        title={editingVisit ? 'Edit Field Visit Record' : 'Log On-Site Field Visit'}
+        onClose={() => { setShowModal(false); setEditingVisit(null); setRevisitTarget(null); }}
+        title={
+          revisitTarget
+            ? `🔄 Log Re-Visit — ${revisitTarget.businessName}`
+            : editingVisit
+            ? 'Edit Field Visit Record'
+            : 'Log On-Site Field Visit'
+        }
         subtitle={
-          editingVisit
+          revisitTarget
+            ? `Recording Visit #${(revisitTarget.visitCount || 1) + 1} • Updates existing client record with timeline history`
+            : editingVisit
             ? `Editing visit to ${editingVisit.businessName}`
             : form.placeName
             ? `📍 ${form.placeName} — ${form.placeAddress}`
@@ -1801,6 +2206,29 @@ export const FieldMarketing = () => {
         maxWidth="max-w-3xl"
       >
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Re-visit context banner */}
+          {revisitTarget && (
+            <div className="p-3.5 bg-blue-50/90 border border-blue-200 rounded-2xl text-xs space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-extrabold text-blue-900 flex items-center gap-1.5">
+                  <RotateCcw size={13} className="text-blue-600" />
+                  Recording Re-Visit #{(revisitTarget.visitCount || 1) + 1} for "{revisitTarget.businessName}"
+                </span>
+                <span className="px-2 py-0.5 bg-blue-600 text-white text-[10px] font-bold rounded-md">
+                  Updates Existing Record
+                </span>
+              </div>
+              <p className="text-blue-800 text-[11px]">
+                Previous status was <strong>{revisitTarget.status}</strong>. Enter new discussion notes, update status, and set a new follow-up if needed.
+              </p>
+              {revisitTarget.discussionNotes && (
+                <p className="text-slate-600 text-[10px] italic bg-white/90 p-2 rounded-lg border border-blue-100">
+                  Last discussion notes: "{revisitTarget.discussionNotes}"
+                </p>
+              )}
+            </div>
+          )}
+
           {/* SECTION 1: Dual Verification - GPS & Live Camera Photo */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {/* GPS Verification Card */}
@@ -1934,7 +2362,7 @@ export const FieldMarketing = () => {
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">State (राज्य) *</label>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">State *</label>
                 <input
                   type="text"
                   required
@@ -1945,7 +2373,7 @@ export const FieldMarketing = () => {
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">City (शहर) *</label>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">City *</label>
                 <input
                   type="text"
                   required
@@ -2031,7 +2459,7 @@ export const FieldMarketing = () => {
                 </div>
                 <input
                   type="tel"
-                  placeholder="Optional - Jo banda on-site dega wo number yahan dalein"
+                  placeholder="Optional alternate on-site phone number"
                   value={form.secondaryPhone}
                   onChange={(e) => setForm({ ...form, secondaryPhone: e.target.value })}
                   className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
@@ -2042,11 +2470,11 @@ export const FieldMarketing = () => {
             {form.personMet !== 'Owner / Director' && (
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Met Person Name & Note (Agar Owner nahi mile)
+                  Contact Person Name & Note (If Owner Not Available)
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Manager Suresh Kumar (Owner will come at 2:00 PM)"
+                  placeholder="e.g. Manager Suresh Kumar (Owner will arrive at 2:00 PM)"
                   value={form.contactPersonName}
                   onChange={(e) => setForm({ ...form, contactPersonName: e.target.value })}
                   className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
@@ -2063,13 +2491,13 @@ export const FieldMarketing = () => {
                 <span>Current Management & Competitor Subscription Status</span>
               </span>
               <span className="text-[10px] text-indigo-600 font-semibold lowercase">
-                (dusra software kab khatam hoga?)
+                (Competitor software expiry date)
               </span>
             </h4>
 
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                Abhi Library Kaise Manage Ho Rahi Hai?
+                How is the Library Currently Managed?
               </label>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {CURRENT_SOFTWARE_OPTIONS.map((opt) => (
@@ -2137,16 +2565,16 @@ export const FieldMarketing = () => {
                 {/* Quick Expiry Duration Chips */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Kab Khatam Hoga? (Quick Duration Preset)
+                    Expiry Period (Quick Duration Preset)
                   </label>
                   <div className="flex items-center gap-1.5 flex-wrap">
                     {[
-                      { label: '⚡ 15 Din Baad', months: 0.5 },
-                      { label: '🗓️ 1 Mahine Baad', months: 1 },
-                      { label: '🗓️ 2 Mahine Baad', months: 2 },
-                      { label: '🗓️ 3 Mahine Baad', months: 3 },
-                      { label: '🗓️ 6 Mahine Baad', months: 6 },
-                      { label: '🗓️ 1 Saal Baad', months: 12 },
+                      { label: '⚡ 15 Days', months: 0.5 },
+                      { label: '🗓️ 1 Month', months: 1 },
+                      { label: '🗓️ 2 Months', months: 2 },
+                      { label: '🗓️ 3 Months', months: 3 },
+                      { label: '🗓️ 6 Months', months: 6 },
+                      { label: '🗓️ 1 Year', months: 12 },
                     ].map((item) => (
                       <button
                         key={item.label}
@@ -2169,11 +2597,11 @@ export const FieldMarketing = () => {
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Current Software Me Kya Problem Hai? (Why switch?)
+                    Current Software Issues & Pain Points (Why switch?)
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. Mehnga hai, WhatsApp auto messages nahi hain, support bekar hai..."
+                    placeholder="e.g. Too expensive, missing WhatsApp automated alerts, poor customer support..."
                     value={form.switchingReason}
                     onChange={(e) => setForm({ ...form, switchingReason: e.target.value })}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-indigo-600"
@@ -2192,7 +2620,7 @@ export const FieldMarketing = () => {
 
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Discussion Summary (Kya baat hui?) *
+                Discussion Summary (Key Points Discussed) *
               </label>
               <textarea
                 rows={3}
@@ -2204,29 +2632,8 @@ export const FieldMarketing = () => {
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-center">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Lead Temperature
-                </label>
-                <div className="flex gap-1.5">
-                  {LEAD_PRIORITY_OPTIONS.map((lp) => (
-                    <button
-                      key={lp.id}
-                      type="button"
-                      onClick={() => setForm({ ...form, leadPriority: lp.id })}
-                      className={`flex-1 py-1.5 text-center text-xs font-bold rounded-xl border transition cursor-pointer ${
-                        form.leadPriority === lp.id
-                          ? lp.color + ' ring-1'
-                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                      }`}
-                    >
-                      {lp.id}
-                    </button>
-                  ))}
-                </div>
-              </div>
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                   Lead Status
@@ -2258,12 +2665,13 @@ export const FieldMarketing = () => {
             </div>
           </div>
 
+
           {/* SECTION 6: Follow-Up & Reminder Scheduler */}
           <div className="p-3.5 bg-amber-50/70 border border-amber-200/90 rounded-2xl space-y-3">
             <div className="flex items-center justify-between">
               <h4 className="text-[11px] font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
                 <BellRing size={13} className="text-amber-600" />
-                <span>Re-Visit & Follow-Up Reminder (Kab Milna Hai / Kya Kaam Hai)</span>
+                <span>Re-Visit & Follow-Up Reminder</span>
               </h4>
             </div>
 
@@ -2312,11 +2720,11 @@ export const FieldMarketing = () => {
             {/* Re-visit / Reminder Note */}
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Re-Visit & Follow-Up Note (Kya Baat Hui / Kya Karna Hai)
+                Follow-Up Action Note
               </label>
               <input
                 type="text"
-                placeholder="e.g. 30 min me aao, Kal dopahar 2 baje milo, Agle hafte owner aayenge..."
+                placeholder="e.g. Come back in 30 mins, Meet owner Monday at 2PM, Owner will be back next week..."
                 value={form.reminderNote}
                 onChange={(e) => setForm({ ...form, reminderNote: e.target.value })}
                 className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-amber-600 font-medium"
@@ -2324,25 +2732,86 @@ export const FieldMarketing = () => {
             </div>
           </div>
 
-          {/* SECTION 7: Visit Times */}
-          <div className="grid grid-cols-2 gap-3 text-xs">
-            <div>
-              <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Check-in Time</label>
-              <input
-                type="text"
-                value={form.checkInTime}
-                onChange={(e) => setForm({ ...form, checkInTime: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 outline-none"
-              />
+          {/* SECTION 7: Visit Times & Ground Duration */}
+          <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                <Clock size={13} className="text-blue-600" />
+                <span>Visit Duration & On-Site Presence</span>
+              </span>
+              <span className="text-xs font-black text-blue-700 bg-blue-100/70 px-2.5 py-0.5 rounded-md">
+                ⏱️ {form.durationMinutes || 20} min on site
+              </span>
             </div>
-            <div>
-              <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">Check-out Time</label>
-              <input
-                type="text"
-                value={form.checkOutTime}
-                onChange={(e) => setForm({ ...form, checkOutTime: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 outline-none"
-              />
+
+            {/* Quick Duration Preset Pills */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] text-slate-500 font-bold">Quick Duration:</span>
+              {[15, 30, 45, 60, 90].map((mins) => (
+                <button
+                  key={mins}
+                  type="button"
+                  onClick={() => {
+                    const newOut = calculateCheckoutTime(form.checkInTime, mins);
+                    setForm({ ...form, durationMinutes: mins, checkOutTime: newOut });
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer border ${
+                    Number(form.durationMinutes) === mins
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
+                      : 'bg-white text-slate-700 hover:bg-slate-100 border-slate-200'
+                  }`}
+                >
+                  {mins >= 60 ? `${mins / 60}h` : `${mins}m`}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs pt-1">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-bold text-slate-700 uppercase tracking-wider text-[10px]">Check-in Time (Arrival)</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nowStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+                      const newOut = calculateCheckoutTime(nowStr, form.durationMinutes || 20);
+                      setForm({ ...form, checkInTime: nowStr, checkOutTime: newOut });
+                    }}
+                    className="text-[10px] font-bold text-blue-600 hover:underline cursor-pointer"
+                  >
+                    Set Now
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={form.checkInTime}
+                  onChange={(e) => setForm({ ...form, checkInTime: e.target.value })}
+                  placeholder="e.g. 11:30 AM"
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-slate-900 font-bold outline-none focus:border-blue-600"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-bold text-slate-700 uppercase tracking-wider text-[10px]">Check-out Time (Departure)</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nowStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+                      setForm({ ...form, checkOutTime: nowStr });
+                    }}
+                    className="text-[10px] font-bold text-blue-600 hover:underline cursor-pointer"
+                  >
+                    Set Now
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={form.checkOutTime}
+                  onChange={(e) => setForm({ ...form, checkOutTime: e.target.value })}
+                  placeholder="e.g. 12:00 PM"
+                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-slate-900 font-bold outline-none focus:border-blue-600"
+                />
+              </div>
             </div>
           </div>
 
@@ -2350,7 +2819,7 @@ export const FieldMarketing = () => {
           <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
             <button
               type="button"
-              onClick={() => { setShowModal(false); setEditingVisit(null); }}
+              onClick={() => { setShowModal(false); setEditingVisit(null); setRevisitTarget(null); }}
               className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
             >
               Cancel
@@ -2358,12 +2827,16 @@ export const FieldMarketing = () => {
             <button
               type="submit"
               disabled={addMutation.isPending || editMutation.isPending}
-              className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+              className={`px-6 py-2.5 text-white text-xs font-bold rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50 flex items-center gap-1.5 ${
+                revisitTarget ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-blue-600 hover:bg-blue-700'
+              }`}
             >
               <CheckCircle2 size={15} />
               <span>
                 {addMutation.isPending || editMutation.isPending
                   ? 'Saving...'
+                  : revisitTarget
+                  ? `🔄 Save Re-Visit #${(revisitTarget.visitCount || 1) + 1} (Update Record)`
                   : editingVisit
                   ? 'Update Visit Record'
                   : 'Save Field Visit Record'}
@@ -2419,14 +2892,9 @@ export const FieldMarketing = () => {
                 )}
               </div>
               <div>
-                <span className="text-slate-400 font-bold uppercase block mb-0.5">Lead Status & Priority</span>
+                <span className="text-slate-400 font-bold uppercase block mb-0.5">Lead Status</span>
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <Badge variant={getStatusBadgeVariant(selectedVisit.status)} size="sm">{selectedVisit.status}</Badge>
-                  {selectedVisit.leadPriority && (
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
-                      {selectedVisit.leadPriority === 'Hot' ? '🔥 Hot' : selectedVisit.leadPriority === 'Warm' ? '⚡ Warm' : '❄️ Cold'}
-                    </span>
-                  )}
                 </div>
               </div>
               <div>
@@ -2536,49 +3004,234 @@ export const FieldMarketing = () => {
               </div>
             </div>
 
-            {/* Visit History for same place */}
-            {getPlaceVisitHistory(selectedVisit.placeId, selectedVisit.businessName).length > 1 && (
-              <div>
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">
-                  📜 All Visits to this Library ({getPlaceVisitHistory(selectedVisit.placeId, selectedVisit.businessName).length})
-                </span>
-                <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {getPlaceVisitHistory(selectedVisit.placeId, selectedVisit.businessName).map((hv, idx) => (
-                    <div key={hv.id} className={`p-2.5 rounded-lg border text-xs ${hv.id === selectedVisit.id ? 'bg-blue-50 border-blue-200' : 'bg-slate-50 border-slate-200'}`}>
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-slate-800">
-                          Visit #{getPlaceVisitHistory(selectedVisit.placeId, selectedVisit.businessName).length - idx}: {hv.staffName} — {formatDate(hv.createdAt)}
-                        </span>
-                        <Badge variant={getStatusBadgeVariant(hv.status)} size="sm">{hv.status}</Badge>
-                      </div>
-                      <p className="text-slate-600 mt-1 line-clamp-1">{hv.discussionNotes}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            {/* Complete Re-Visit Timeline (In-Doc History + Legacy Multi-Doc) */}
+            {(() => {
+              const inDocHistory = Array.isArray(selectedVisit.visitHistory) ? selectedVisit.visitHistory : [];
+              const legacyDocs = getPlaceVisitHistory(selectedVisit.placeId, selectedVisit.businessName)
+                .filter((v) => v.id !== selectedVisit.id);
+              const totalVisitsCount = (selectedVisit.visitCount || inDocHistory.length + 1) + legacyDocs.length;
 
-            {selectedVisit.location && (
-              <div className="p-4 bg-blue-50/60 rounded-xl border border-blue-100 flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-bold text-blue-900">GPS On-Site Verification</p>
-                  <p className="text-[11px] text-blue-700 mt-0.5">
-                    Coords: {selectedVisit.location.latitude}, {selectedVisit.location.longitude}
-                  </p>
+              if (inDocHistory.length === 0 && legacyDocs.length === 0) return null;
+
+              return (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <RotateCcw size={14} className="text-indigo-600" />
+                      Client Visit Timeline ({totalVisitsCount} Total Visits)
+                    </span>
+                    <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-full">
+                      All Past History Preserved
+                    </span>
+                  </div>
+
+                  <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+                    {/* Latest / Current Visit */}
+                    <div className="p-3 rounded-xl border-2 border-indigo-200 bg-indigo-50/40 relative">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-black uppercase bg-indigo-600 text-white px-2 py-0.5 rounded-md shadow-xs">
+                            Visit #{selectedVisit.visitCount || (inDocHistory.length + 1)} (Latest)
+                          </span>
+                          <span className="text-xs font-bold text-slate-800">
+                            {selectedVisit.lastStaffName || selectedVisit.staffName || 'Staff'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Badge variant={getStatusBadgeVariant(selectedVisit.status)} size="sm">
+                            {selectedVisit.status}
+                          </Badge>
+                          <span className="text-[10px] text-slate-500 font-semibold">
+                            {formatDate(selectedVisit.lastVisitedAt || selectedVisit.createdAt)}
+                          </span>
+                        </div>
+                      </div>
+                      {selectedVisit.checkInTime && (
+                        <p className="text-[10px] text-slate-500 mt-1">
+                          🕒 Time: {selectedVisit.checkInTime}{selectedVisit.checkOutTime ? ` → ${selectedVisit.checkOutTime}` : ''}
+                        </p>
+                      )}
+                      <p className="text-xs text-slate-700 mt-1.5 bg-white/80 p-2.5 rounded-lg border border-indigo-100 whitespace-pre-wrap">
+                        {selectedVisit.discussionNotes || 'No notes entered for this visit.'}
+                      </p>
+                    </div>
+
+                    {/* Past in-doc visits in reverse chronological order */}
+                    {[...inDocHistory].reverse().map((past, idx) => {
+                      const pastVisitNum = inDocHistory.length - idx;
+                      return (
+                        <div key={idx} className="p-3 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-slate-50 transition">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-black uppercase bg-slate-200 text-slate-700 px-2 py-0.5 rounded-md">
+                                Visit #{pastVisitNum}
+                              </span>
+                              <span className="text-xs font-bold text-slate-800">
+                                {past.staffName || 'Staff'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <Badge variant={getStatusBadgeVariant(past.status)} size="sm">
+                                {past.status}
+                              </Badge>
+                              <span className="text-[10px] text-slate-500 font-semibold">
+                                {formatDate(past.visitedAt)}
+                              </span>
+                            </div>
+                          </div>
+                          {past.checkInTime && (
+                            <p className="text-[10px] text-slate-500 mt-1">
+                              🕒 Time: {past.checkInTime}{past.checkOutTime ? ` → ${past.checkOutTime}` : ''}
+                            </p>
+                          )}
+                          {past.discussionNotes && (
+                            <p className="text-xs text-slate-700 mt-1.5 bg-white p-2.5 rounded-lg border border-slate-200 whitespace-pre-wrap">
+                              {past.discussionNotes}
+                            </p>
+                          )}
+                          {past.followUpDate && (
+                            <p className="text-[10px] text-amber-700 font-semibold mt-1">
+                              ⏰ Follow-up set: {past.followUpDate}{past.followUpTime ? ` @ ${past.followUpTime}` : ''}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {/* Legacy separate document visits if any exist */}
+                    {legacyDocs.map((leg) => (
+                      <div key={leg.id} className="p-3 rounded-xl border border-dashed border-slate-300 bg-slate-50/50">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold text-slate-500 bg-slate-200 px-1.5 py-0.5 rounded">
+                              Past Record
+                            </span>
+                            <span className="text-xs font-bold text-slate-700">
+                              {leg.staffName || 'Staff'}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <Badge variant={getStatusBadgeVariant(leg.status)} size="sm">
+                              {leg.status}
+                            </Badge>
+                            <span className="text-[10px] text-slate-400">
+                              {formatDate(leg.createdAt)}
+                            </span>
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-600 mt-1 line-clamp-2">{leg.discussionNotes}</p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <a
-                  href={selectedVisit.location.mapsUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 shadow-xs transition"
-                >
-                  <MapPin size={12} /> Google Maps <ExternalLink size={10} />
-                </a>
-              </div>
-            )}
+              );
+            })()}
+
+            {/* Boss Eye Ground Verification Box */}
+            {(() => {
+              const auth = evaluateVisitAuthenticity(selectedVisit);
+              const duration = getVisitDurationMinutes(selectedVisit);
+              return (
+                <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-200 text-xs space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                      <ShieldCheck size={14} className="text-blue-600" />
+                      <span>Boss Eye Ground Verification (On-Site Proof)</span>
+                    </span>
+                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${auth.badgeClass}`}>
+                      {auth.statusText}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                    {/* 1. On-Site Ground Timing */}
+                    <div className="p-2.5 bg-white rounded-xl border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-bold uppercase block">🚶 On-Site Visit Time</span>
+                      <span className="font-extrabold text-blue-700 text-xs mt-0.5 block">
+                        ⏱️ {formatDurationMinutes(duration)} on site
+                      </span>
+                      <span className="text-[10px] text-slate-600 font-semibold block mt-0.5">
+                        {formatDisplayTime(selectedVisit.checkInTime, selectedVisit.createdAt)} → {formatDisplayTime(selectedVisit.checkOutTime)}
+                      </span>
+                    </div>
+
+                    {/* 2. Server Entry Received Time */}
+                    <div className="p-2.5 bg-white rounded-xl border border-slate-200">
+                      <span className="text-[10px] text-amber-700 font-bold uppercase block">📥 Server Entry Received</span>
+                      <span className="font-extrabold text-amber-900 text-xs mt-0.5 block">
+                        🕒 {formatEntryTimestamp(selectedVisit.createdAt).time}
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-medium block">
+                        📅 {formatEntryTimestamp(selectedVisit.createdAt).date}
+                      </span>
+                      <span className="text-[9px] font-bold text-emerald-700 block mt-0.5">
+                        {evaluateSyncDelay(selectedVisit.checkInTime, selectedVisit.createdAt).label}
+                      </span>
+                    </div>
+
+                    {/* 3. GPS Accuracy */}
+                    <div className="p-2.5 bg-white rounded-xl border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-bold uppercase block">GPS Authenticity</span>
+                      <span className="font-bold text-slate-800 text-xs mt-0.5 block">
+                        {selectedVisit.location ? `±${selectedVisit.location.accuracy || 15}m Accuracy` : 'No GPS Locked'}
+                      </span>
+                      {auth.distanceToPlace != null && (
+                        <span className={`text-[10px] font-bold ${auth.level === 'distance_alert' ? 'text-rose-600' : 'text-emerald-600'}`}>
+                          {auth.distanceToPlace > 800 ? `🚨 ${auth.distanceToPlace}m from place` : `🎯 On Target (${auth.distanceToPlace}m)`}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* 4. Photo Proof */}
+                    <div className="p-2.5 bg-white rounded-xl border border-slate-200">
+                      <span className="text-[10px] text-slate-400 font-bold uppercase block">On-Site Photo Proof</span>
+                      <span className={`font-bold text-xs mt-0.5 block ${selectedVisit.photoUrl ? 'text-emerald-700' : 'text-slate-500'}`}>
+                        {selectedVisit.photoUrl ? '📸 Photo Attached' : '❌ No Photo Proof'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {selectedVisit.location && (
+                    <div className="flex items-center justify-between pt-1">
+                      <span className="text-[11px] text-slate-500 font-medium">
+                        Coordinates: {selectedVisit.location.latitude?.toFixed(5)}, {selectedVisit.location.longitude?.toFixed(5)}
+                      </span>
+                      <a
+                        href={selectedVisit.location.mapsUrl || `https://www.google.com/maps?q=${selectedVisit.location.latitude},${selectedVisit.location.longitude}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 shadow-xs transition"
+                      >
+                        <MapPin size={12} /> View on Google Maps <ExternalLink size={10} />
+                      </a>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Quick Actions */}
-            <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+            <div className="flex items-center gap-2 pt-2 border-t border-slate-100 flex-wrap">
+              <button
+                onClick={() => {
+                  const v = selectedVisit;
+                  setSelectedVisit(null);
+                  openConvertModal(v);
+                }}
+                className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 transition cursor-pointer shadow-xs"
+              >
+                <UserPlus size={12} /> Onboard as Client
+              </button>
+              {selectedVisit.phone && (
+                <a
+                  href={`https://wa.me/91${selectedVisit.phone.replace(/\D/g, '')}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold rounded-lg flex items-center gap-1.5 transition"
+                >
+                  <MessageCircle size={12} /> WhatsApp
+                </a>
+              )}
               {hasPermission('marketing', 'create') && (
                 <>
                   <button
@@ -2642,6 +3295,239 @@ export const FieldMarketing = () => {
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition cursor-pointer"
               >
                 Close Preview
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* ═══ 1-Click Convert to Client Modal ═══ */}
+      {showConvertModal && (
+        <Modal
+          isOpen={!!showConvertModal}
+          onClose={() => setShowConvertModal(null)}
+          title="🚀 Onboard Direct to Library Clients"
+          subtitle={`Convert "${showConvertModal.businessName}" into an active software client with live login`}
+          maxWidth="max-w-lg"
+        >
+          <form onSubmit={handleConvertClientSubmit} className="space-y-4">
+            <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 text-xs text-emerald-800">
+              <p className="font-bold flex items-center gap-1.5">
+                <Sparkles size={14} className="text-emerald-600" />
+                <span>Direct CRM & Billing Activation</span>
+              </p>
+              <p className="mt-0.5 text-emerald-700">
+                This creates a new client entry in <strong>Library Clients</strong>, sets status to Active, allocates a trial/subscription, and marks this field visit as <strong>Deal Closed</strong>!
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Library / Business Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={convertForm.libraryName}
+                  onChange={(e) => setConvertForm({ ...convertForm, libraryName: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Owner Name *</label>
+                  <input
+                    type="text"
+                    required
+                    value={convertForm.ownerName}
+                    onChange={(e) => setConvertForm({ ...convertForm, ownerName: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Contact Phone *</label>
+                  <input
+                    type="text"
+                    required
+                    value={convertForm.phone}
+                    onChange={(e) => setConvertForm({ ...convertForm, phone: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Client Email (Login ID) *</label>
+                <input
+                  type="email"
+                  required
+                  value={convertForm.email}
+                  onChange={(e) => setConvertForm({ ...convertForm, email: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Address / Location</label>
+                <input
+                  type="text"
+                  value={convertForm.address}
+                  onChange={(e) => setConvertForm({ ...convertForm, address: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Selected Plan / Package</label>
+                <select
+                  value={convertForm.planName}
+                  onChange={(e) => setConvertForm({ ...convertForm, planName: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-blue-500 bg-white"
+                >
+                  <option value="Free Trial (14 Days)">Free Trial (14 Days Demo)</option>
+                  <option value="Monthly Starter (30 Days)">Monthly Starter (30 Days)</option>
+                  <option value="Annual Plan (1 Year)">Annual Plan (1 Year - Standard)</option>
+                  <option value="Enterprise 2-Year Plan">Enterprise 2-Year Plan</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowConvertModal(null)}
+                className="px-4 py-2 border border-slate-200 text-slate-600 text-xs font-bold rounded-xl hover:bg-slate-50 transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={converting}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-60"
+              >
+                {converting ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin" />
+                    <span>Onboarding Client...</span>
+                  </>
+                ) : (
+                  <>
+                    <UserPlus size={13} />
+                    <span>Confirm Onboarding & Close Deal</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* ═══ Competitor Expiry Radar Modal ═══ */}
+      {showRadarModal && (
+        <Modal
+          isOpen={showRadarModal}
+          onClose={() => setShowRadarModal(false)}
+          title="🎯 Competitor Software Expiry Radar"
+          subtitle="Target these libraries right before their current software expires to close deals immediately"
+          maxWidth="max-w-4xl"
+        >
+          <div className="space-y-4">
+            <div className="flex items-center justify-between p-3.5 bg-gradient-to-r from-rose-50 via-amber-50 to-orange-50 rounded-2xl border border-rose-200">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center font-black">
+                  <Flame size={20} />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-slate-900">
+                    {expiringCompetitors.length} High-Intent Switch Prospects Found
+                  </h4>
+                  <p className="text-xs text-slate-600">
+                    Libraries currently paying a competitor whose license expires within the next 35 days.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {expiringCompetitors.length === 0 ? (
+              <div className="p-8 text-center text-slate-500 text-xs">
+                No competitor softwares found expiring in the next 35 days. Log more competitor renewal dates during field visits!
+              </div>
+            ) : (
+              <div className="max-h-[60vh] overflow-y-auto space-y-2.5 pr-1">
+                {expiringCompetitors.map((item) => (
+                  <div
+                    key={item.id}
+                    className="p-3.5 bg-white rounded-xl border border-slate-200 hover:border-blue-300 hover:shadow-xs transition flex flex-col md:flex-row md:items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-extrabold text-slate-900 text-sm">{item.businessName}</span>
+                        <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md">
+                          💻 {item.competitorName || 'Competitor'}
+                        </span>
+                        {item.isUrgent && (
+                          <span className="text-[10px] font-black text-rose-700 bg-rose-100 border border-rose-300 px-2 py-0.5 rounded-full animate-pulse">
+                            🚨 URGENT: {item.daysRemaining} days left!
+                          </span>
+                        )}
+                        {!item.isUrgent && (
+                          <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                            ⏳ {item.daysRemaining} days left
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-slate-500 mt-1 flex items-center gap-2 flex-wrap">
+                        <span>👤 {item.ownerName || 'Owner'}</span>
+                        {item.phone && <span>• 📞 {item.phone}</span>}
+                        {item.city && <span>• 📍 {item.city}</span>}
+                        <span>• 📅 Expiry: <strong className="text-slate-800">{item.competitorExpiryDate}</strong></span>
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                      {item.phone && (
+                        <>
+                          <a
+                            href={`tel:${item.phone}`}
+                            className="px-2.5 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-lg flex items-center gap-1 transition"
+                            title="Call Owner"
+                          >
+                            <PhoneCall size={12} /> Call
+                          </a>
+                          <a
+                            href={`https://wa.me/91${item.phone.replace(/\D/g, '')}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-xs font-bold rounded-lg flex items-center gap-1 transition"
+                            title="WhatsApp"
+                          >
+                            <MessageCircle size={12} /> WhatsApp
+                          </a>
+                        </>
+                      )}
+                      <button
+                        onClick={() => {
+                          setShowRadarModal(false);
+                          openConvertModal(item);
+                        }}
+                        className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg flex items-center gap-1 transition shadow-2xs cursor-pointer"
+                        title="Close Deal & Onboard"
+                      >
+                        <UserPlus size={12} /> Onboard
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="pt-2 border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowRadarModal(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                Close Radar
               </button>
             </div>
           </div>

@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
-import { getFieldVisits, logFieldVisit, getCurrentGPSLocation, getAttendanceLogs, punchAttendance, updateVisitStatus } from '../firebase/services/marketingService';
+import { getFieldVisits, logFieldVisit, updateFieldVisit, getCurrentGPSLocation, getAttendanceLogs, updateVisitStatus } from '../firebase/services/marketingService';
 import { calculateStaffPayroll, getStaffUsers } from '../firebase/services/staffService';
 import { getSoftwareVerticals } from '../firebase/services/verticalService';
 import { searchNearbyLibraries, formatDistance, getNavigationUrl } from '../services/googleMapsService';
@@ -36,9 +36,23 @@ import {
   Camera,
   X,
   Layers,
-  BellRing
+  BellRing,
+  ShieldCheck,
+  ShieldAlert,
+  Send,
+  Bell,
+  RotateCcw,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import {
+  evaluateVisitAuthenticity,
+  getVisitDurationMinutes,
+  formatDurationMinutes,
+  calculateCheckoutTime,
+  formatDisplayTime,
+  formatEntryTimestamp,
+  evaluateSyncDelay,
+} from '../services/visitAuditHelper';
 
 const VISIT_STATUSES = ['Interested', 'Demo Given', 'Follow Up', 'Deal Closed', 'Not Interested'];
 
@@ -144,11 +158,11 @@ export const StaffDashboard = () => {
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
-  const [punching, setPunching] = useState(false);
   const [showVisitModal, setShowVisitModal] = useState(false);
   const [capturingGps, setCapturingGps] = useState(false);
   const [gpsData, setGpsData] = useState(null);
   const [statusDropdownId, setStatusDropdownId] = useState(null);
+  const [revisitTarget, setRevisitTarget] = useState(null);
 
   // Form State for logging visit
   const [form, setForm] = useState(initialStaffVisitForm);
@@ -178,15 +192,6 @@ export const StaffDashboard = () => {
     queryFn: getAttendanceLogs,
   });
 
-  // 5. Punch Mutation
-  const punchMutation = useMutation({
-    mutationFn: punchAttendance,
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['admin_attendance_logs'] });
-      toast.success(variables.type === 'in' ? 'Duty Started with GPS!' : 'Duty Ended with GPS!');
-    },
-  });
-
   // 6. Log Visit Mutation
   const addVisitMutation = useMutation({
     mutationFn: logFieldVisit,
@@ -195,6 +200,20 @@ export const StaffDashboard = () => {
       toast.success('Client visit logged successfully!');
       setShowVisitModal(false);
       resetVisitForm();
+    },
+  });
+
+  // 6b. Update / Re-Visit Mutation (updates existing document in-place and preserves history)
+  const editVisitMutation = useMutation({
+    mutationFn: ({ id, data }) => updateFieldVisit(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin_field_visits'] });
+      toast.success('Re-visit updated successfully! History preserved.');
+      setShowVisitModal(false);
+      resetVisitForm();
+    },
+    onError: (err) => {
+      toast.error(err.message || 'Failed to update re-visit');
     },
   });
 
@@ -208,7 +227,12 @@ export const StaffDashboard = () => {
   });
 
   const resetVisitForm = (prefill = null) => {
+    const now = new Date();
+    const liveTimeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const liveOutStr = new Date(now.getTime() + 20 * 60000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+
     if (prefill) {
+      setRevisitTarget(prefill.id ? prefill : null);
       setForm({
         ...initialStaffVisitForm,
         clientType: prefill.clientType || (activeVerticals.length === 1 ? activeVerticals[0].shortName : 'Library'),
@@ -226,14 +250,21 @@ export const StaffDashboard = () => {
         competitorName: prefill.competitorName || '',
         competitorExpiryDate: prefill.competitorExpiryDate || '',
         competitorDuration: prefill.competitorDuration || '',
+        status: prefill.status || 'Follow Up',
+        discussionNotes: '', // Clean for fresh notes entry
         placeId: prefill.placeId || '',
         placeName: prefill.placeName || '',
         placeAddress: prefill.placeAddress || '',
+        checkInTime: liveTimeStr,
+        checkOutTime: liveOutStr,
       });
     } else {
+      setRevisitTarget(null);
       setForm({
         ...initialStaffVisitForm,
         clientType: activeVerticals.length === 1 ? activeVerticals[0].shortName : 'Library',
+        checkInTime: liveTimeStr,
+        checkOutTime: liveOutStr,
       });
     }
     setGpsData(null);
@@ -351,22 +382,6 @@ export const StaffDashboard = () => {
     (s) => s.id === myId || s.email?.toLowerCase() === user?.email?.toLowerCase()
   ) || user;
 
-  const handlePunch = async (type) => {
-    setPunching(true);
-    let location = null;
-    try {
-      location = await getCurrentGPSLocation();
-    } catch (e) {}
-
-    punchMutation.mutate({
-      staffId: myId,
-      staffName: user?.displayName || user?.name,
-      type,
-      location,
-    });
-    setPunching(false);
-  };
-
   const handleVisitSubmit = (e) => {
     e.preventDefault();
     if (!form.businessName.trim()) {
@@ -374,12 +389,66 @@ export const StaffDashboard = () => {
       return;
     }
 
-    addVisitMutation.mutate({
-      ...form,
-      staffId: myId,
-      staffName: user?.displayName || user?.name,
-      location: gpsData,
-    });
+    const now = new Date();
+    const liveTimeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const liveOutStr = new Date(now.getTime() + 20 * 60000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+    const checkInTime = (form.checkInTime && form.checkInTime.trim()) || liveTimeStr;
+    const checkOutTime = (form.checkOutTime && form.checkOutTime.trim()) || liveOutStr;
+
+    if (revisitTarget) {
+      // Archive previous visit state into visitHistory array
+      const previousLog = {
+        visitedAt: revisitTarget.lastVisitedAt || revisitTarget.createdAt || new Date().toISOString(),
+        staffName: revisitTarget.lastStaffName || revisitTarget.staffName || user?.displayName || user?.name || 'Staff',
+        staffId: revisitTarget.lastStaffId || revisitTarget.staffId || myId || 'staff',
+        status: revisitTarget.status || 'Interested',
+        discussionNotes: revisitTarget.discussionNotes || '',
+        checkInTime: revisitTarget.checkInTime || '',
+        checkOutTime: revisitTarget.checkOutTime || '',
+        durationMinutes: revisitTarget.durationMinutes || 20,
+        followUpDate: revisitTarget.followUpDate || '',
+        followUpTime: revisitTarget.followUpTime || '',
+        location: revisitTarget.location || null,
+        photoUrl: revisitTarget.photoUrl || '',
+      };
+
+      const updatedHistory = [...(revisitTarget.visitHistory || []), previousLog];
+      const newVisitCount = (revisitTarget.visitCount || updatedHistory.length) + 1;
+
+      editVisitMutation.mutate({
+        id: revisitTarget.id,
+        data: {
+          ...form,
+          checkInTime,
+          checkOutTime,
+          durationMinutes: Number(form.durationMinutes) || 20,
+          staffId: myId,
+          staffName: user?.displayName || user?.name || 'Staff',
+          visitCount: newVisitCount,
+          lastVisitedAt: new Date().toISOString(),
+          lastStaffName: user?.displayName || user?.name || 'Staff',
+          lastStaffId: myId || 'staff',
+          visitHistory: updatedHistory,
+          location: gpsData || revisitTarget.location || null,
+          photoUrl: form.photoUrl || revisitTarget.photoUrl || '',
+          updatedAt: new Date().toISOString(),
+        },
+      });
+    } else {
+      addVisitMutation.mutate({
+        ...form,
+        checkInTime,
+        checkOutTime,
+        durationMinutes: Number(form.durationMinutes) || 20,
+        staffId: myId,
+        staffName: user?.displayName || user?.name || 'Staff',
+        location: gpsData,
+        visitCount: 1,
+        visitHistory: [],
+        lastVisitedAt: new Date().toISOString(),
+      });
+    }
   };
 
   const handleStatusChange = (id, newStatus) => {
@@ -410,6 +479,93 @@ export const StaffDashboard = () => {
     }).format(amt || 0);
   };
 
+  // ── Live Follow-up Reminder Engine ─────────────────────────────────────────
+  // Requests browser notification permission once on mount, then checks every
+  // 60 seconds if a follow-up is due at this exact minute (date + time match).
+  const notifiedIds = useRef(new Set());
+
+  useEffect(() => {
+    // Ask for browser notification permission
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  useEffect(() => {
+    const checkReminders = () => {
+      const now = new Date();
+      const currentDate = now.toISOString().split('T')[0];
+      const currentHHMM = now.toTimeString().slice(0, 5); // "HH:MM"
+
+      myFollowups.forEach((f) => {
+        if (!f.followUpDate || !f.followUpTime) return;
+        // Only fire once per visit per session
+        if (notifiedIds.current.has(f.id)) return;
+
+        const followHHMM = f.followUpTime.slice(0, 5); // normalise to HH:MM
+        if (f.followUpDate === currentDate && followHHMM === currentHHMM) {
+          notifiedIds.current.add(f.id);
+
+          // Toast reminder
+          toast(
+            (t) => (
+              <div className="flex flex-col gap-1">
+                <p className="font-black text-sm text-amber-900">
+                  ⏰ Follow-up Due Now!
+                </p>
+                <p className="text-xs font-semibold text-slate-800">
+                  {f.businessName}
+                </p>
+                <p className="text-[11px] text-slate-600">
+                  {f.ownerName} · {f.phone}
+                </p>
+                {f.reminderNote && (
+                  <p className="text-[11px] italic text-slate-500">📝 {f.reminderNote}</p>
+                )}
+                <div className="flex gap-2 mt-1">
+                  {f.phone && (
+                    <a
+                      href={`tel:${f.phone}`}
+                      className="px-2 py-1 bg-blue-600 text-white text-[10px] font-bold rounded-lg"
+                      onClick={() => toast.dismiss(t.id)}
+                    >
+                      📞 Call Now
+                    </a>
+                  )}
+                  <button
+                    onClick={() => toast.dismiss(t.id)}
+                    className="px-2 py-1 bg-slate-100 text-slate-700 text-[10px] font-bold rounded-lg"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            ),
+            {
+              duration: 30000,
+              style: { background: '#fffbeb', border: '1px solid #fbbf24', maxWidth: '360px' },
+              icon: '🔔',
+            }
+          );
+
+          // Browser push notification (works even if tab is in background)
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification(`⏰ Follow-up: ${f.businessName}`, {
+              body: `${f.ownerName} · ${f.followUpTime}${f.reminderNote ? '\n' + f.reminderNote : ''}`,
+              icon: '/favicon.ico',
+              tag: `followup-${f.id}`,
+            });
+          }
+        }
+      });
+    };
+
+    checkReminders(); // check immediately on mount / data change
+    const interval = setInterval(checkReminders, 60000); // then every 60s
+    return () => clearInterval(interval);
+  }, [myFollowups]);
+  // ────────────────────────────────────────────────────────────────────────────
+
   if (loadingVisits || loadingAtt) {
     return <LoadingSpinner fullScreen label="Loading your staff workspace..." />;
   }
@@ -432,109 +588,133 @@ export const StaffDashboard = () => {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {/* Quick GPS Duty Punch */}
-            {!myTodayLog ? (
-              <button
-                onClick={() => handlePunch('in')}
-                disabled={punching}
-                className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold rounded-xl shadow-lg shadow-emerald-500/25 transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                <LogIn size={16} />
-                <span>{punching ? 'Locating...' : 'Punch-In Duty'}</span>
-              </button>
-            ) : !myTodayLog.punchOut ? (
-              <button
-                onClick={() => handlePunch('out')}
-                disabled={punching}
-                className="px-4 py-2.5 bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold rounded-xl shadow-lg shadow-rose-500/25 transition flex items-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                <LogOut size={16} />
-                <span>{punching ? 'Locating...' : 'Punch-Out Duty'}</span>
-              </button>
-            ) : (
-              <span className="px-3 py-1.5 bg-white/10 rounded-xl text-xs font-bold text-emerald-300 flex items-center gap-1.5">
-                <CheckCircle2 size={14} /> Duty Done
-              </span>
-            )}
-
             {/* Log Visit Button */}
             <button
               onClick={() => openVisitModal()}
-              className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-lg shadow-blue-600/25 transition flex items-center gap-2 cursor-pointer"
+              className="px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-bold rounded-xl shadow-lg shadow-blue-600/25 transition flex items-center gap-2 cursor-pointer"
             >
-              <Plus size={16} />
+              <Plus size={18} />
               <span>Log Client Visit</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* Today's Follow-up Alert Banner */}
+      {/* Today's Follow-up Reminder Banner */}
       {dueFollowups.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 shadow-sm">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 bg-amber-100 text-amber-700 rounded-lg">
-              <AlertTriangle size={20} />
-            </div>
-            <div>
-              <h3 className="font-bold text-amber-900 text-sm">
-                📞 You have {dueFollowups.length} follow-up callbacks due ({overdueFollowups.length} overdue)
-              </h3>
-              <p className="text-xs text-amber-700">Please reach out to these clients today.</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {dueFollowups.map((f) => (
-              <div key={f.id} className="bg-white rounded-xl p-4 border border-amber-100 shadow-sm flex flex-col justify-between">
-                <div>
-                  <div className="flex items-start justify-between gap-2">
-                    <h4 className="font-bold text-slate-800 text-sm truncate">{f.businessName}</h4>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${f.followUpDate < todayStr ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
-                      {f.followUpDate} {f.followUpTime ? `@ ${f.followUpTime}` : ''}
-                    </span>
-                  </div>
-                  <div className="text-xs text-slate-600 mt-1 font-medium flex items-center justify-between">
-                    <span>{f.ownerName}</span>
-                    {f.personMet && <span className="text-[10px] text-slate-400">({f.personMet})</span>}
-                  </div>
-
-                  {f.nextActionItem && (
-                    <div className="mt-2 text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-1 rounded border border-amber-200">
-                      🎯 {f.nextActionItem}
-                    </div>
-                  )}
-
-                  {f.reminderNote && (
-                    <p className="text-[10px] text-slate-600 mt-1 italic">
-                      📝 {f.reminderNote}
-                    </p>
-                  )}
-
-                  {f.phone && (
-                    <div className="flex items-center gap-2 mt-2">
-                      <a href={`tel:${f.phone}`} className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-medium hover:bg-blue-100 transition">
-                        <PhoneCall size={12} /> Call
-                      </a>
-                      <a href={`https://wa.me/91${f.phone.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-medium hover:bg-emerald-100 transition">
-                        <MessageCircle size={12} /> WhatsApp
-                      </a>
-                    </div>
-                  )}
-
-                  {f.discussionNotes && (
-                    <p className="text-[11px] text-slate-500 mt-3 line-clamp-2 italic border-l-2 border-amber-200 pl-2">
-                      "{f.discussionNotes.substring(0, 80)}{f.discussionNotes.length > 80 ? '...' : ''}"
-                    </p>
-                  )}
-                </div>
-                <button
-                  onClick={() => openVisitModal(f)}
-                  className="mt-4 w-full py-2 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <MapPin size={14} /> Log Follow-up Visit (Nayi Entry)
-                </button>
+        <div className={`rounded-2xl border p-5 shadow-sm ${overdueFollowups.length > 0 ? 'bg-rose-50 border-rose-200' : 'bg-amber-50 border-amber-200'}`}>
+          {/* Banner Header */}
+          <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className={`p-2.5 rounded-xl ${overdueFollowups.length > 0 ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
+                <Bell size={20} className="animate-pulse" />
               </div>
-            ))}
+              <div>
+                <h3 className={`font-black text-sm ${overdueFollowups.length > 0 ? 'text-rose-900' : 'text-amber-900'}`}>
+                  {overdueFollowups.length > 0
+                    ? `🚨 ${overdueFollowups.length} Overdue + ${dueFollowups.length - overdueFollowups.length} Due Today — Act Now!`
+                    : `⏰ ${dueFollowups.length} Follow-up${dueFollowups.length > 1 ? 's' : ''} Due Today`}
+                </h3>
+                <p className={`text-xs mt-0.5 ${overdueFollowups.length > 0 ? 'text-rose-700' : 'text-amber-700'}`}>
+                  Call or WhatsApp these clients — don't lose the lead!
+                </p>
+              </div>
+            </div>
+
+            {/* Browser Notification Permission Button */}
+            {'Notification' in window && Notification.permission !== 'granted' && (
+              <button
+                onClick={() => Notification.requestPermission().then((p) => {
+                  if (p === 'granted') toast.success('🔔 Reminders enabled! You\'ll get notified at the exact follow-up time.');
+                })}
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-white border border-amber-300 text-amber-800 text-[11px] font-bold rounded-xl hover:bg-amber-50 transition cursor-pointer shadow-xs shrink-0"
+              >
+                <Bell size={12} /> Enable Auto-Alerts
+              </button>
+            )}
+            {('Notification' in window && Notification.permission === 'granted') && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold rounded-xl">
+                <Bell size={11} /> Auto-Alerts ON ✓
+              </span>
+            )}
+          </div>
+
+          {/* Follow-up Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {dueFollowups.map((f) => {
+              const isOverdue = f.followUpDate < todayStr;
+              return (
+                <div
+                  key={f.id}
+                  className={`bg-white rounded-xl p-4 border shadow-xs flex flex-col justify-between ${isOverdue ? 'border-rose-200 ring-1 ring-rose-100' : 'border-amber-100'}`}
+                >
+                  <div>
+                    {/* Name + date badge */}
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="min-w-0">
+                        <h4 className="font-bold text-slate-800 text-sm truncate">{f.businessName}</h4>
+                        <p className="text-[11px] text-slate-500 mt-0.5">{f.ownerName}{f.personMet ? ` · ${f.personMet.split(' ')[0]}` : ''}</p>
+                      </div>
+                      <div className={`text-[10px] font-black px-2 py-1 rounded-lg shrink-0 text-center ${isOverdue ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-800'}`}>
+                        {isOverdue ? '🚨 OVERDUE' : '📅 TODAY'}
+                        <div className="text-[9px] font-semibold mt-0.5">
+                          {f.followUpDate}{f.followUpTime ? ` @ ${f.followUpTime}` : ''}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Next Action */}
+                    {f.nextActionItem && (
+                      <div className="mb-2 text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-1.5 rounded-lg border border-amber-200">
+                        🎯 {f.nextActionItem}
+                      </div>
+                    )}
+
+                    {/* Reminder Note */}
+                    {f.reminderNote && (
+                      <p className="text-[10px] text-slate-600 mb-2 italic bg-slate-50 px-2 py-1.5 rounded-lg border border-slate-100">
+                        📝 {f.reminderNote}
+                      </p>
+                    )}
+
+                    {/* Discussion snippet */}
+                    {f.discussionNotes && (
+                      <p className="text-[10px] text-slate-500 mb-2 line-clamp-2 border-l-2 border-amber-200 pl-2 italic">
+                        "{f.discussionNotes.substring(0, 80)}{f.discussionNotes.length > 80 ? '...' : ''}"
+                      </p>
+                    )}
+
+                    {/* Contact buttons */}
+                    {f.phone && (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <a
+                          href={`tel:${f.phone}`}
+                          className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-[11px] font-bold hover:bg-blue-100 transition border border-blue-200"
+                        >
+                          <PhoneCall size={11} /> Call
+                        </a>
+                        <a
+                          href={`https://wa.me/91${f.phone.replace(/\D/g, '')}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 text-emerald-700 rounded-lg text-[11px] font-bold hover:bg-emerald-100 transition border border-emerald-200"
+                        >
+                          <MessageCircle size={11} /> WhatsApp
+                        </a>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Log follow-up button */}
+                  <button
+                    onClick={() => openVisitModal(f)}
+                    className={`mt-3 w-full py-2 text-white text-[11px] font-bold rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${isOverdue ? 'bg-rose-600 hover:bg-rose-700' : 'bg-amber-600 hover:bg-amber-700'}`}
+                  >
+                    <MapPin size={13} /> Log Follow-up Visit
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -633,7 +813,7 @@ export const StaffDashboard = () => {
                       <td className="px-5 py-3.5">
                         <span className="font-semibold text-slate-700">{v.ownerName}</span>
                         {v.phone && (
-                          <div className="flex items-center gap-1.5 mt-0.5">
+                          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                             <a href={`tel:${v.phone}`} className="text-blue-600 hover:text-blue-800" title="Call">
                               <PhoneCall size={11} />
                             </a>
@@ -645,19 +825,39 @@ export const StaffDashboard = () => {
                         )}
                       </td>
                       <td className="px-5 py-3.5">
-                        {v.location ? (
-                          <a
-                            href={v.location.mapsUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 font-bold text-blue-600 hover:underline"
-                          >
-                            <MapPin size={11} />
-                            <span>Verified GPS</span>
-                          </a>
-                        ) : (
-                          <span className="text-slate-400">-</span>
-                        )}
+                        {(() => {
+                          const auth = evaluateVisitAuthenticity(v);
+                          const dur = getVisitDurationMinutes(v);
+                          return (
+                            <div className="flex flex-col gap-1">
+                              <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded border w-fit ${auth.badgeClass}`}>
+                                {auth.level === 'verified' && <ShieldCheck size={11} className="text-emerald-600" />}
+                                {auth.level === 'distance_alert' && <AlertTriangle size={11} className="text-rose-600" />}
+                                {auth.level === 'gps_only' && <MapPin size={11} className="text-blue-600" />}
+                                {auth.level === 'photo_only' && <Camera size={11} className="text-amber-600" />}
+                                <span>{auth.statusText}</span>
+                              </span>
+                              <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-slate-500 font-medium">
+                                <span className="font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200" title="On-site visit time">
+                                  🚶 Visit: {formatDisplayTime(v.checkInTime, v.createdAt)} ({dur > 0 ? `${formatDurationMinutes(dur)}` : '20m'})
+                                </span>
+                                <span className="text-amber-800 font-bold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200" title="Server entry timestamp">
+                                  📥 Logged: {formatEntryTimestamp(v.createdAt).time}
+                                </span>
+                                {v.location && (
+                                  <a
+                                    href={v.location.mapsUrl || `https://www.google.com/maps?q=${v.location.latitude},${v.location.longitude}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-blue-600 hover:underline flex items-center gap-0.5 font-bold"
+                                  >
+                                    Maps <ExternalLink size={9} />
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-5 py-3.5 text-right relative">
                         <button
@@ -732,10 +932,18 @@ export const StaffDashboard = () => {
                     </p>
                     {f.phone && (
                       <div className="flex items-center gap-1.5">
-                        <a href={`tel:${f.phone}`} className="text-blue-600 hover:text-blue-800" title="Call">
+                        <button
+                          type="button"
+                          onClick={() => openVisitModal(f)}
+                          className="flex items-center gap-1 px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-md text-[10px] font-bold hover:bg-indigo-100 transition border border-indigo-200 cursor-pointer"
+                          title="Log Re-Visit"
+                        >
+                          <RotateCcw size={10} /> Re-Visit
+                        </button>
+                        <a href={`tel:${f.phone}`} className="p-1 text-blue-600 hover:text-blue-800" title="Call">
                           <PhoneCall size={12} />
                         </a>
-                        <a href={`https://wa.me/91${f.phone.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:text-emerald-800" title="WhatsApp">
+                        <a href={`https://wa.me/91${f.phone.replace(/\D/g, '')}`} target="_blank" rel="noopener noreferrer" className="p-1 text-emerald-600 hover:text-emerald-800" title="WhatsApp">
                           <MessageCircle size={12} />
                         </a>
                       </div>
@@ -755,12 +963,37 @@ export const StaffDashboard = () => {
       {/* Log Visit Modal for Staff */}
       <Modal
         isOpen={showVisitModal}
-        onClose={() => setShowVisitModal(false)}
-        title="Log On-Site Client Visit"
-        subtitle="Capture GPS, photo proof, competitor expiry, and smart follow-up schedule"
+        onClose={() => {
+          setShowVisitModal(false);
+          setRevisitTarget(null);
+        }}
+        title={revisitTarget ? `Log Re-Visit: ${revisitTarget.businessName}` : 'Log On-Site Client Visit'}
+        subtitle={
+          revisitTarget
+            ? `Visit #${(revisitTarget.visitCount || 1) + 1} — Updating existing record and preserving past history`
+            : 'Capture GPS, photo proof, competitor expiry, and smart follow-up schedule'
+        }
         maxWidth="max-w-2xl"
       >
         <form onSubmit={handleVisitSubmit} className="space-y-4">
+          {revisitTarget && (
+            <div className="p-3 bg-indigo-50/80 border border-indigo-200 rounded-xl text-xs space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-black text-indigo-900 flex items-center gap-1.5">
+                  <RotateCcw size={13} className="text-indigo-600" />
+                  Re-Visiting Existing Client (Visit #{(revisitTarget.visitCount || 1) + 1})
+                </span>
+                <span className="text-[10px] text-indigo-700 font-bold">
+                  Previous Status: {revisitTarget.status}
+                </span>
+              </div>
+              {revisitTarget.discussionNotes && (
+                <p className="text-indigo-800 text-[11px] line-clamp-2">
+                  <span className="font-bold">Past Note:</span> {revisitTarget.discussionNotes}
+                </p>
+              )}
+            </div>
+          )}
           {/* Dual Verification: GPS & Photo Proof */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {/* GPS Pinpoint */}
@@ -936,7 +1169,7 @@ export const StaffDashboard = () => {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                State (राज्य) *
+                State *
               </label>
               <input
                 type="text"
@@ -949,7 +1182,7 @@ export const StaffDashboard = () => {
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                City (शहर) *
+                City *
               </label>
               <input
                 type="text"
@@ -978,7 +1211,7 @@ export const StaffDashboard = () => {
           <div className="p-3 bg-indigo-50/60 border border-indigo-200 rounded-xl space-y-2.5">
             <span className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider flex items-center gap-1">
               <Layers size={12} className="text-indigo-600" />
-              <span>Abhi Kaise Manage Ho Rahi Hai? (Competitor Tracking)</span>
+              <span>Current Library Management (Competitor Tracking)</span>
             </span>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
@@ -1018,7 +1251,7 @@ export const StaffDashboard = () => {
                 </div>
 
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[10px] text-slate-500 font-bold">Kab Khatam?</span>
+                  <span className="text-[10px] text-slate-500 font-bold">Expiry?</span>
                   {[
                     { label: '15 Din', months: 0.5 },
                     { label: '1 Month', months: 1 },
@@ -1048,7 +1281,7 @@ export const StaffDashboard = () => {
             <textarea
               rows={2}
               required
-              placeholder="Kya baat hui? Owner ka reaction, software requirement, demo response..."
+              placeholder="What was discussed? Owner's reaction, software requirement, demo response..."
               value={form.discussionNotes}
               onChange={(e) => setForm({ ...form, discussionNotes: e.target.value })}
               className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 outline-none focus:border-blue-600"
@@ -1059,7 +1292,7 @@ export const StaffDashboard = () => {
           <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2.5">
             <span className="text-[11px] font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1">
               <BellRing size={12} className="text-amber-600" />
-              <span>Re-Visit & Follow-Up (Kab Milna Hai / Kya Kaam Hai)</span>
+              <span>Re-Visit & Follow-Up Reminder</span>
             </span>
 
             <div className="grid grid-cols-2 gap-2">
@@ -1125,21 +1358,113 @@ export const StaffDashboard = () => {
             </div>
           </div>
 
+          {/* Visit Times & Ground Duration */}
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1">
+                <Clock size={12} className="text-blue-600" />
+                <span>Visit Duration & On-Site Presence</span>
+              </span>
+              <span className="text-xs font-black text-blue-700 bg-blue-100/70 px-2 py-0.5 rounded-md">
+                ⏱️ {form.durationMinutes || 20} min on site
+              </span>
+            </div>
+
+            {/* Quick Duration Preset Pills */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] text-slate-500 font-bold">Quick Select:</span>
+              {[15, 30, 45, 60, 90].map((mins) => (
+                <button
+                  key={mins}
+                  type="button"
+                  onClick={() => {
+                    const newOut = calculateCheckoutTime(form.checkInTime, mins);
+                    setForm({ ...form, durationMinutes: mins, checkOutTime: newOut });
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer border ${
+                    Number(form.durationMinutes) === mins
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
+                      : 'bg-white text-slate-700 hover:bg-slate-100 border-slate-200'
+                  }`}
+                >
+                  {mins >= 60 ? `${mins / 60}h` : `${mins}m`}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-xs pt-1">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-bold text-slate-600 text-[10px] uppercase">Arrival (Check-in)</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nowStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+                      const newOut = calculateCheckoutTime(nowStr, form.durationMinutes || 20);
+                      setForm({ ...form, checkInTime: nowStr, checkOutTime: newOut });
+                    }}
+                    className="text-[10px] font-bold text-blue-600 hover:underline cursor-pointer"
+                  >
+                    Set Now
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={form.checkInTime}
+                  onChange={(e) => setForm({ ...form, checkInTime: e.target.value })}
+                  placeholder="e.g. 11:30 AM"
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-900 font-bold outline-none focus:border-blue-600"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-bold text-slate-600 text-[10px] uppercase">Departure (Check-out)</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nowStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+                      setForm({ ...form, checkOutTime: nowStr });
+                    }}
+                    className="text-[10px] font-bold text-blue-600 hover:underline cursor-pointer"
+                  >
+                    Set Now
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  value={form.checkOutTime}
+                  onChange={(e) => setForm({ ...form, checkOutTime: e.target.value })}
+                  placeholder="e.g. 12:00 PM"
+                  className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-900 font-bold outline-none focus:border-blue-600"
+                />
+              </div>
+            </div>
+          </div>
+
           <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
             <button
               type="button"
-              onClick={() => setShowVisitModal(false)}
-              className="px-4 py-2 bg-slate-100 text-slate-700 text-xs font-bold rounded-xl"
+              onClick={() => {
+                setShowVisitModal(false);
+                setRevisitTarget(null);
+              }}
+              className="px-4 py-2 bg-slate-100 text-slate-700 text-xs font-bold rounded-xl cursor-pointer hover:bg-slate-200 transition"
             >
               Cancel
             </button>
             <button
               type="submit"
-              disabled={addVisitMutation.isPending}
-              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5"
+              disabled={addVisitMutation.isPending || editVisitMutation.isPending}
+              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 disabled:opacity-50 transition"
             >
               <Check size={14} />
-              <span>{addVisitMutation.isPending ? 'Saving...' : 'Save Visit Record'}</span>
+              <span>
+                {addVisitMutation.isPending || editVisitMutation.isPending
+                  ? 'Saving...'
+                  : revisitTarget
+                  ? 'Update Record with New Re-Visit'
+                  : 'Save Visit Record'}
+              </span>
             </button>
           </div>
         </form>

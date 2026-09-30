@@ -588,7 +588,7 @@ export const LibraryClients = () => {
           }
         }}
         title="✨ Make Account Brand New (Data Clean)"
-        subtitle="Client ka pura operational data reset karke unka account bilkul naya banayein — Login & Plan active rahenge!"
+        subtitle="Reset all operational data to start completely fresh — Login and active subscription plan remain safe!"
         maxWidth="max-w-xl"
       >
         {cleanTarget && (
@@ -637,15 +637,15 @@ export const LibraryClients = () => {
                 <div>
                   <div className="flex items-center gap-2">
                     <h5 className="text-xs font-black text-slate-900">
-                      🧹 Reset Data to Brand New (Bilkul Naya Account) - Recommended
+                      🧹 Reset Data to Brand New (Fresh Account) - Recommended
                     </h5>
                     <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-full">
                       Account Safe
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
-                    Client ka <strong>Login, Password aur Active Subscription bilkul safe rahega</strong>. 
-                    Sirf andar ka sara data (Students, Seats, Fees, Receipts, Expenses) 0 ho jayega aur dashboard Day-1 ki tarah bilkul fresh khulega!
+                    The client's <strong>Login, Password and Active Subscription will remain completely safe</strong>. 
+                    All internal operational data (Students, Seats, Fees, Receipts, Expenses) will be reset to 0 and the dashboard will open fresh like Day 1!
                   </p>
                 </div>
               </div>
@@ -677,7 +677,7 @@ export const LibraryClients = () => {
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-500 mt-0.5">
-                    Account profile aur subscription bhi delete ho jayegi.
+                    Account profile and active subscription will also be permanently deleted.
                   </p>
                 </div>
               </div>
@@ -713,7 +713,7 @@ export const LibraryClients = () => {
               />
               <label htmlFor="cleanConfirm" className="text-xs font-semibold text-slate-700 cursor-pointer select-none">
                 {cleanMode === 'data_only'
-                  ? `Haan, main confirm karta hoon ki "${cleanTarget.libraryName}" ka data reset karke unka account bilkul brand new kar diya jaye (Login & Plan safe rahenge).`
+                  ? `Yes, I confirm that data for "${cleanTarget.libraryName}" will be reset to brand new (Login & Plan will remain safe).`
                   : `I understand this will permanently delete the entire account and data for "${cleanTarget.libraryName}".`}
               </label>
             </div>
@@ -772,7 +772,7 @@ export const LibraryClients = () => {
           className="space-y-4"
         >
           <div className="p-3 bg-blue-50/80 rounded-xl border border-blue-200 text-xs text-blue-900 leading-relaxed">
-            Agar kisi client ka account delete ho gaya tha ya wo usi email par login nahi kar pa rahe, yaha unka email daal kar turant unka <strong>Library Profile & Active Subscription</strong> restore karein.
+            If an existing client account was deleted or cannot log in with their email, enter their registered email here to immediately restore their <strong>Library Profile & Active Subscription</strong>.
           </div>
 
           <div>
