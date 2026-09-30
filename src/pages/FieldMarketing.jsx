@@ -290,7 +290,7 @@ export const FieldMarketing = () => {
   const [nearbyLibraries, setNearbyLibraries] = useState([]);
   const [searchingNearby, setSearchingNearby] = useState(false);
   const [nearbySearchDone, setNearbySearchDone] = useState(false);
-  const [searchRadius, setSearchRadius] = useState('');
+  const [searchRadius, setSearchRadius] = useState(5000);
   const [customRadiusMode, setCustomRadiusMode] = useState(false);
   const [searchLimit, setSearchLimit] = useState('');
   const [customLimitMode, setCustomLimitMode] = useState(false);
@@ -539,20 +539,15 @@ export const FieldMarketing = () => {
 
   const handleManualSearch = (e) => {
     if (e && e.preventDefault) e.preventDefault();
-    if (!manualSearchQuery.trim()) {
-      toast(`Type a ${activeCategory === 'gym' ? 'gym' : 'library'} name or area to search`, { icon: '🔍' });
+    if (!manualSearchQuery.trim() && !myLocation) {
+      toast('Type an area/city name or allow GPS location to find nearest places', { icon: '🔍' });
       return;
     }
 
     const hasRadius = searchRadius !== '' && Number(searchRadius) > 0;
     const hasLimit = searchLimit !== '' && Number(searchLimit) > 0;
 
-    if (!hasRadius && !hasLimit) {
-      toast.error('Please specify either Radius (km) or Number of Places to search!');
-      return;
-    }
-
-    const radiusVal = hasRadius ? Number(searchRadius) : null;
+    const radiusVal = hasRadius ? Number(searchRadius) : (hasLimit ? null : 5000);
     const limitVal = hasLimit ? Number(searchLimit) : null;
     performSearch(myLocation, activeCategory, manualSearchQuery, radiusVal, limitVal);
   };
@@ -1817,7 +1812,7 @@ export const FieldMarketing = () => {
             <div className="flex-1 min-w-[200px]">
               <input
                 type="text"
-                placeholder={activeCategory === 'gym' ? "Search gym name or city (e.g. Gold Gym, Guna)..." : "Search library name or city (e.g. Study point, Guna)..."}
+                placeholder={activeCategory === 'gym' ? "Search gym name, area or city (or leave blank for nearest)..." : "Search library name, area or city (or leave blank for nearest)..."}
                 value={manualSearchQuery}
                 onChange={(e) => setManualSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleManualSearch(e)}
