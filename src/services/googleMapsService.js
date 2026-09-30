@@ -398,45 +398,113 @@ const fallbackPlacesServiceSearch = (lat, lng, radiusMeters) => {
 export const searchLibrariesByText = async (query, lat, lng, radius = null, maxResults = null) => {
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
-  // Filter out irrelevant businesses (toys, restaurants, dairies, clothes, salons, clinics, etc.)
+  const cleanQ = (query || '').trim();
+  const isGym = cleanQ.toLowerCase().includes('gym') || cleanQ.toLowerCase().includes('fitness');
+
+  // Filter out irrelevant businesses (schools, colleges, tuitions, toys, restaurants, dairies, clothes, salons, clinics, etc.)
   const isRelevantPlace = (p) => {
     const name = (p.displayName?.text || p.displayName || p.name || '').toLowerCase();
     const address = (p.formattedAddress || p.address || '').toLowerCase();
-    const text = `${name} ${address}`;
-    const badWords = [
+    const primaryType = (p.primaryType || '').toLowerCase();
+    const types = Array.isArray(p.types) ? p.types.map((t) => String(t).toLowerCase()) : [];
+    const text = `${name} ${address} ${primaryType} ${types.join(' ')}`;
+
+    // Common non-target business types across all categories
+    const universalBadWords = [
       'toy world', 'toy library', 'khilone', 'toys',
       'restaurant', 'dairy', 'sweets', 'mithai', 'dhaba', 'hotel', 'cafe',
       'bhojnalaya', 'bakery', 'fast food', 'pizza', 'burger', 'tea stall', 'chai',
-      'clothing', 'garment', 'textile', 'saree', 'footwear', 'shoe',
+      'clothing', 'garment', 'textile', 'saree', 'footwear', 'shoe', 'fashion',
       'electronics', 'hardware', 'saloon', 'beauty parlour', 'spa',
-      'pharmacy', 'medical store', 'chemist', 'hospital', 'pathology'
+      'pharmacy', 'medical store', 'chemist', 'hospital', 'pathology', 'diagnostic', 'dental', 'clinic',
+      'petrol pump', 'gas station', 'bank', 'atm', 'police station', 'post office',
+      'temple', 'mandir', 'masjid', 'mosque', 'church', 'gurudwara',
+      'real estate', 'property dealer', 'tour and travels'
     ];
-    return !badWords.some((w) => text.includes(w));
+    if (universalBadWords.some((w) => text.includes(w))) {
+      return false;
+    }
+
+    if (!isGym) {
+      // 1. Google Types check for School/University/Preschool
+      const academicGoogleTypes = [
+        'school', 'primary_school', 'secondary_school', 'high_school',
+        'university', 'preschool'
+      ];
+      const hasAcademicGoogleType = academicGoogleTypes.some((t) => primaryType === t || types.includes(t));
+
+      // 2. Name check for School, College, University, Coaching institutes
+      const academicKeywords = [
+        'school', 'vidyalaya', 'vidhyalaya', 'vidya mandir', 'shiksha niketan',
+        'college', 'university', 'mahavidyalaya', 'vishwavidyalaya',
+        'public school', 'high school', 'senior secondary', 'convent',
+        'montessori', 'kindergarten', 'kanya pathshala', 'shishu mandir',
+        'coaching', 'tuition', 'tutor', 'classes'
+      ];
+      const hasAcademicKeyword = academicKeywords.some((w) => name.includes(w));
+
+      if (hasAcademicGoogleType || hasAcademicKeyword) {
+        // EXCEPTION: Only allow if it's explicitly a dedicated self-study library / reading room despite an academic-sounding word
+        const isExplicitStudyLibrary = [
+          'study library', 'reading room', 'reading library', 'self study',
+          'study point', 'study zone', 'study space', 'study circle',
+          'abhyasika', 'digital library', 'study hall'
+        ].some((w) => name.includes(w));
+
+        if (!isExplicitStudyLibrary) {
+          return false; // Reject school / college / tuition
+        }
+      }
+    } else {
+      // Gym Search: Ensure it is a gym or fitness center
+      const gymKeywords = ['gym', 'fitness', 'workout', 'crossfit', 'bodybuilding', 'health club', 'iron temple', 'aerobics', 'zumba'];
+      const isGymMatch = primaryType.includes('gym') || types.some((t) => t.includes('gym') || t.includes('fitness')) || gymKeywords.some((w) => name.includes(w));
+      if (!isGymMatch) {
+        return false;
+      }
+    }
+
+    return true;
   };
 
   // 1. Direct REST Places API (New) with proper pagination and radius handling
   if (apiKey) {
     try {
-      const targetCount = maxResults && Number(maxResults) > 0 ? Number(maxResults) : 100;
-      const cleanQ = (query || '').trim();
-      const isGym = cleanQ.toLowerCase().includes('gym') || cleanQ.toLowerCase().includes('fitness');
+      const targetCount = maxResults && Number(maxResults) > 0 ? Number(maxResults) : 1000;
 
       let queryList = [];
       if (cleanQ && cleanQ !== 'study library reading room' && cleanQ !== 'gym fitness center') {
-        queryList = [cleanQ];
-        // If searching a specific query and wanting a larger count, add contextual query variations
-        if (targetCount > 20) {
-          if (isGym) {
-            queryList.push(`${cleanQ} gym`, 'gym fitness center', 'fitness club gym');
-          } else {
-            queryList.push(`${cleanQ} library`, 'study library', 'reading room library', 'study point library', 'pustakalaya');
-          }
+        if (isGym) {
+          queryList = [cleanQ, `${cleanQ} gym`, `${cleanQ} fitness center`, 'gym fitness center'];
+        } else {
+          queryList = [
+            cleanQ,
+            `${cleanQ} study library`,
+            `${cleanQ} reading room`,
+            `${cleanQ} self study library`,
+            `${cleanQ} study point`,
+            `${cleanQ} digital library`,
+            `${cleanQ} pustakalaya`,
+            `${cleanQ} library`,
+          ];
         }
       } else {
         queryList = isGym
           ? ['gym fitness center', 'fitness club gym', 'workout health gym', 'crossfit gym']
-          : ['study library', 'reading room library', 'study point library', 'pustakalaya', 'self study digital library', 'library'];
+          : [
+              'study library',
+              'self study library',
+              'reading room library',
+              'study point library',
+              'pustakalaya',
+              'digital library',
+              'abhyasika',
+              'study zone library',
+              'library',
+            ];
       }
+      // Deduplicate queries
+      queryList = Array.from(new Set(queryList.map((q) => q.trim()).filter(Boolean)));
 
       // Location configuration: handle circles <= 50km and bounding box rectangles > 50km (up to 1000km)
       let locationConfig = {};
@@ -486,7 +554,7 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
             headers: {
               'Content-Type': 'application/json',
               'X-Goog-Api-Key': apiKey,
-              'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.regularOpeningHours,nextPageToken',
+              'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.regularOpeningHours,places.types,places.primaryType,nextPageToken',
             },
             body: JSON.stringify(body),
           });

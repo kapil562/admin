@@ -220,7 +220,7 @@ const RADIUS_OPTIONS = [
 ];
 
 const LIMIT_OPTIONS = [
-  { value: '', label: '-- Auto (100 Nearest Places) --' },
+  { value: '', label: '-- All Available (Full Coverage) --' },
   { value: 10, label: '10 Places' },
   { value: 20, label: '20 Places' },
   { value: 30, label: '30 Places' },
@@ -231,6 +231,7 @@ const LIMIT_OPTIONS = [
   { value: 200, label: '200 Places' },
   { value: 300, label: '300 Places' },
   { value: 500, label: '500 Places' },
+  { value: 1000, label: '1000 Places' },
 ];
 
 const DATE_FILTERS = [
@@ -294,6 +295,7 @@ export const FieldMarketing = () => {
   const [searchLimit, setSearchLimit] = useState('');
   const [customLimitMode, setCustomLimitMode] = useState(false);
   const [manualSearchQuery, setManualSearchQuery] = useState('');
+  const [nearbyVisitFilter, setNearbyVisitFilter] = useState('all'); // 'all' | 'unvisited' | 'visited'
   const [showDiscovery, setShowDiscovery] = useState(true);
 
   const isSuperAdmin = user?.role === 'super_admin';
@@ -460,7 +462,7 @@ export const FieldMarketing = () => {
       if (!query) {
         query = category === 'gym' ? 'gym fitness center' : 'study library reading room';
       }
-      const targetLimit = limit ? Number(limit) : 100;
+      const targetLimit = limit && Number(limit) > 0 ? Number(limit) : 1000;
       const res = await searchLibrariesByText(query, targetLoc.latitude, targetLoc.longitude, radius, targetLimit);
       const resultsList = res || [];
       setNearbyLibraries(resultsList);
@@ -1168,6 +1170,27 @@ export const FieldMarketing = () => {
     },
     [visits]
   );
+
+  // Computed Visited vs Unvisited for discovery places
+  const nearbyCounts = useMemo(() => {
+    let visited = 0;
+    let unvisited = 0;
+    nearbyLibraries.forEach((place) => {
+      const history = getPlaceVisitHistory(place.placeId, place.name);
+      if (history.length > 0) visited++;
+      else unvisited++;
+    });
+    return { all: nearbyLibraries.length, unvisited, visited };
+  }, [nearbyLibraries, getPlaceVisitHistory]);
+
+  const filteredNearbyLibraries = useMemo(() => {
+    return nearbyLibraries.filter((place) => {
+      const isVisited = getPlaceVisitHistory(place.placeId, place.name).length > 0;
+      if (nearbyVisitFilter === 'unvisited') return !isVisited;
+      if (nearbyVisitFilter === 'visited') return isVisited;
+      return true;
+    });
+  }, [nearbyLibraries, nearbyVisitFilter, getPlaceVisitHistory]);
 
   // Visit count per place or business name (Visit #1, Visit #2, etc.)
   const getVisitNumber = useCallback(
@@ -1944,16 +1967,78 @@ export const FieldMarketing = () => {
             {/* Results Grid */}
             {nearbySearchDone && (
               <div>
-                <p className="text-xs font-bold text-slate-500 mb-3">
-                  {nearbyLibraries.length} {activeCategory === 'gym' ? 'gyms' : 'libraries'} found
-                  {searchRadius > 0 ? ` within ${searchRadius / 1000} km` : ''}
-                  {searchLimit > 0 ? ` (top ${searchLimit})` : ''}
-                  {' '}• Sorted by distance (nearest first)
-                </p>
-                {nearbyLibraries.length > 0 ? (
+                {/* Search summary & Visited Filter Toggle */}
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3.5 pb-3 border-b border-slate-200/80">
+                  <div>
+                    <p className="text-xs font-bold text-slate-800">
+                      Found <span className="text-blue-600 font-extrabold">{nearbyLibraries.length}</span> {activeCategory === 'gym' ? 'gyms' : 'libraries'}
+                      {searchRadius > 0 ? ` within ${searchRadius / 1000} km` : ''}
+                      {searchLimit > 0 ? ` (top ${searchLimit})` : ''}
+                    </p>
+                    <p className="text-[11px] text-slate-400 font-medium">Sorted strictly by nearest distance</p>
+                  </div>
+
+                  {/* 3-way Filter Pills: All | Not Visited Yet | Already Visited */}
+                  <div className="inline-flex items-center p-1 bg-slate-100 rounded-xl border border-slate-200 shadow-2xs gap-1 flex-wrap sm:flex-nowrap">
+                    <button
+                      type="button"
+                      onClick={() => setNearbyVisitFilter('all')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                        nearbyVisitFilter === 'all'
+                          ? 'bg-white text-slate-900 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <span>All Places</span>
+                      <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-extrabold ${
+                        nearbyVisitFilter === 'all' ? 'bg-slate-100 text-slate-700' : 'bg-slate-200/70 text-slate-600'
+                      }`}>
+                        {nearbyCounts.all}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setNearbyVisitFilter('unvisited')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                        nearbyVisitFilter === 'unvisited'
+                          ? 'bg-amber-500 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                      title="Show only fresh places where no field visit has been logged"
+                    >
+                      <span>🆕 Not Visited Yet</span>
+                      <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-extrabold ${
+                        nearbyVisitFilter === 'unvisited' ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {nearbyCounts.unvisited}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setNearbyVisitFilter('visited')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                        nearbyVisitFilter === 'visited'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                      title="Show only places that have already been visited"
+                    >
+                      <span>✅ Already Visited</span>
+                      <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-extrabold ${
+                        nearbyVisitFilter === 'visited' ? 'bg-emerald-700 text-white' : 'bg-emerald-100 text-emerald-800'
+                      }`}>
+                        {nearbyCounts.visited}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+
+                {filteredNearbyLibraries.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[480px] overflow-y-auto pr-1">
-                    {nearbyLibraries.map((place) => {
-                      const placeHistory = getPlaceVisitHistory(place.placeId);
+                    {filteredNearbyLibraries.map((place) => {
+                      const placeHistory = getPlaceVisitHistory(place.placeId, place.name);
                       const lastVisit = placeHistory[0];
 
                       return (
@@ -2020,7 +2105,9 @@ export const FieldMarketing = () => {
                               );
                             })()
                           ) : (
-                            <p className="text-[11px] text-slate-400 italic">Not visited yet</p>
+                            <p className="text-[11px] text-amber-700 font-semibold bg-amber-50 px-2 py-1 rounded-md border border-amber-200/60 inline-block">
+                              🆕 Not visited yet
+                            </p>
                           )}
 
                           {/* Action Buttons */}
@@ -2051,8 +2138,19 @@ export const FieldMarketing = () => {
                     })}
                   </div>
                 ) : (
-                  <div className="text-center py-8 text-sm text-slate-400">
-                    No libraries found. Try a different search or increase radius.
+                  <div className="text-center py-8 px-4 bg-slate-50/70 border border-dashed border-slate-200 rounded-2xl">
+                    <p className="text-sm font-bold text-slate-700">
+                      {nearbyVisitFilter === 'unvisited'
+                        ? '🎉 All found places have already been visited!'
+                        : nearbyVisitFilter === 'visited'
+                        ? 'ℹ️ None of these places have been visited yet.'
+                        : 'No places found. Try a different search or increase radius.'}
+                    </p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {nearbyVisitFilter !== 'all'
+                        ? 'Switch filter to "All Places" to see the full list.'
+                        : 'Try searching with a higher radius or specific area name.'}
+                    </p>
                   </div>
                 )}
               </div>
