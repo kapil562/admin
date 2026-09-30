@@ -473,63 +473,13 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
     try {
       const targetCount = maxResults && Number(maxResults) > 0 ? Number(maxResults) : 1000;
 
-      const isGenericLibrarySearch =
-        !cleanQ ||
-        [
-          'library',
-          'libraries',
-          'study library',
-          'study libraries',
-          'reading room',
-          'reading rooms',
-          'study point',
-          'pustakalaya',
-          'abhyasika',
-          'study library reading room',
-          'all',
-          'nearby',
-          'nearest',
-        ].includes(cleanQ.toLowerCase());
-
+      // Exact direct query search as requested by user (no extra query additions)
       let queryList = [];
-      if (isGym) {
-        const isGenericGym = !cleanQ || ['gym', 'gyms', 'fitness', 'fitness center', 'gym fitness center'].includes(cleanQ.toLowerCase());
-        queryList = isGenericGym
-          ? ['gym fitness center', 'fitness club gym', 'workout health gym', 'crossfit gym', 'bodybuilding gym']
-          : [cleanQ, `${cleanQ} gym`, `${cleanQ} fitness center`, 'gym fitness center'];
-      } else if (isGenericLibrarySearch) {
-        // 12 comprehensive search queries to guarantee 100% maximum library coverage in radius
-        queryList = [
-          'study library',
-          'reading room',
-          'self study library',
-          'study point',
-          'digital library',
-          'pustakalaya',
-          'abhyasika',
-          'study zone',
-          'library',
-          'self study',
-          'reading hall',
-          'student library',
-        ];
+      if (cleanQ) {
+        queryList = [cleanQ];
       } else {
-        // Specific location or area name typed by user (e.g. "laxmi nagar", "sikar", "patna")
-        queryList = [
-          cleanQ,
-          `study library in ${cleanQ}`,
-          `reading room in ${cleanQ}`,
-          `self study library in ${cleanQ}`,
-          `study point in ${cleanQ}`,
-          `digital library in ${cleanQ}`,
-          `pustakalaya in ${cleanQ}`,
-          `abhyasika in ${cleanQ}`,
-          `library in ${cleanQ}`,
-          `${cleanQ} study library`,
-        ];
+        queryList = isGym ? ['gym'] : ['library'];
       }
-      // Deduplicate queries
-      queryList = Array.from(new Set(queryList.map((q) => q.trim()).filter(Boolean)));
 
       // Location configuration: handle circles <= 50km and bounding box rectangles > 50km (up to 1000km)
       let locationConfig = {};

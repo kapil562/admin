@@ -460,7 +460,7 @@ export const FieldMarketing = () => {
     try {
       let query = (customQuery != null ? customQuery : manualSearchQuery).trim();
       if (!query) {
-        query = category === 'gym' ? 'gym fitness center' : 'study library reading room';
+        query = category === 'gym' ? 'gym' : 'library';
       }
       const targetLimit = limit && Number(limit) > 0 ? Number(limit) : 1000;
       const res = await searchLibrariesByText(query, targetLoc.latitude, targetLoc.longitude, radius, targetLimit);
@@ -1812,7 +1812,7 @@ export const FieldMarketing = () => {
             <div className="flex-1 min-w-[200px]">
               <input
                 type="text"
-                placeholder={activeCategory === 'gym' ? "Search gym name, area or city (or leave blank for nearest)..." : "Search library name, area or city (or leave blank for nearest)..."}
+                placeholder={activeCategory === 'gym' ? "Search gym name or city (e.g. Gold Gym, Guna)..." : "Search library name or city (e.g. Study point, Guna)..."}
                 value={manualSearchQuery}
                 onChange={(e) => setManualSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleManualSearch(e)}
