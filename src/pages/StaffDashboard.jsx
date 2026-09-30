@@ -1536,54 +1536,16 @@ export const StaffDashboard = () => {
               />
             </div>
             <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  Total Seats
-                </label>
-                <span className="text-[10px] text-blue-600 font-semibold">Type or Pick</span>
-              </div>
-              <div className="relative flex items-center">
-                <input
-                  type="text"
-                  placeholder="Type (e.g. 60) or select"
-                  value={form.seatCapacity}
-                  onChange={(e) => setForm({ ...form, seatCapacity: e.target.value })}
-                  className="w-full pl-3 pr-24 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-blue-600"
-                />
-                <select
-                  value={SEAT_CAPACITY_OPTIONS.includes(form.seatCapacity) ? form.seatCapacity : ''}
-                  onChange={(e) => {
-                    if (e.target.value) setForm({ ...form, seatCapacity: e.target.value });
-                  }}
-                  className="absolute right-1 top-1 bottom-1 px-2 bg-white hover:bg-slate-100 text-slate-700 rounded-lg text-[10px] font-bold border border-slate-200 outline-none cursor-pointer"
-                  title="Choose preset range"
-                >
-                  <option value="">Presets ▾</option>
-                  {SEAT_CAPACITY_OPTIONS.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="flex flex-wrap gap-1 mt-1.5">
-                {['< 50', '50-100', '100-150', '150-250', '250+'].map((p) => {
-                  const fullVal = p.includes('Seats') ? p : `${p} Seats`;
-                  const isSelected = form.seatCapacity === fullVal || form.seatCapacity === p;
-                  return (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setForm({ ...form, seatCapacity: fullVal })}
-                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold border transition ${
-                        isSelected
-                          ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
-                          : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  );
-                })}
-              </div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Total Seats
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. 50, 80 Seats, 120"
+                value={form.seatCapacity}
+                onChange={(e) => setForm({ ...form, seatCapacity: e.target.value })}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-blue-600"
+              />
             </div>
           </div>
 
@@ -1621,29 +1583,7 @@ export const StaffDashboard = () => {
                 />
               </div>
               <div>
-                <div className="flex items-center justify-between mb-0.5">
-                  <label className="block text-[11px] font-bold text-slate-600">Mobile Number</label>
-                  {form.phone && form.phone.trim().length >= 5 && (
-                    <div className="flex items-center gap-1">
-                      <a
-                        href={`tel:${form.phone}`}
-                        className="inline-flex items-center gap-0.5 px-1.5 py-0.2 bg-blue-600 hover:bg-blue-700 text-white rounded text-[9px] font-bold transition shadow-2xs"
-                        title="Direct Call / Dial from Phone"
-                      >
-                        <PhoneCall size={9} /> Call / Dial
-                      </a>
-                      <a
-                        href={`https://wa.me/91${form.phone.replace(/\D/g, '')}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-0.5 px-1.5 py-0.2 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[9px] font-bold transition shadow-2xs"
-                        title="Open WhatsApp"
-                      >
-                        <MessageCircle size={9} /> WA
-                      </a>
-                    </div>
-                  )}
-                </div>
+                <label className="block text-[11px] font-bold text-slate-600 mb-0.5">Mobile Number</label>
                 <div className="relative flex items-center">
                   <input
                     type="tel"
