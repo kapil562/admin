@@ -290,7 +290,7 @@ export const FieldMarketing = () => {
   const [nearbyLibraries, setNearbyLibraries] = useState([]);
   const [searchingNearby, setSearchingNearby] = useState(false);
   const [nearbySearchDone, setNearbySearchDone] = useState(false);
-  const [searchRadius, setSearchRadius] = useState(5000);
+  const [searchRadius, setSearchRadius] = useState('');
   const [customRadiusMode, setCustomRadiusMode] = useState(false);
   const [searchLimit, setSearchLimit] = useState('');
   const [customLimitMode, setCustomLimitMode] = useState(false);
@@ -460,10 +460,19 @@ export const FieldMarketing = () => {
     try {
       let query = (customQuery != null ? customQuery : manualSearchQuery).trim();
       if (!query) {
-        query = category === 'gym' ? 'gym' : 'library';
+        toast.error('Search query is compulsory! Please enter what to search.');
+        setSearchingNearby(false);
+        return;
       }
-      const targetLimit = limit && Number(limit) > 0 ? Number(limit) : 1000;
-      const res = await searchLibrariesByText(query, targetLoc.latitude, targetLoc.longitude, radius, targetLimit);
+      const hasRadius = radius && Number(radius) > 0;
+      const hasLimit = limit && Number(limit) > 0;
+      if (!hasRadius && !hasLimit) {
+        toast.error('Please specify either KM Radius or Number of Places.');
+        setSearchingNearby(false);
+        return;
+      }
+      const targetLimit = hasLimit ? Number(limit) : 1000;
+      const res = await searchLibrariesByText(query, targetLoc.latitude, targetLoc.longitude, hasRadius ? Number(radius) : null, targetLimit);
       const resultsList = res || [];
       setNearbyLibraries(resultsList);
       setNearbySearchDone(true);
@@ -539,17 +548,23 @@ export const FieldMarketing = () => {
 
   const handleManualSearch = (e) => {
     if (e && e.preventDefault) e.preventDefault();
-    if (!manualSearchQuery.trim() && !myLocation) {
-      toast('Type an area/city name or allow GPS location to find nearest places', { icon: '🔍' });
+    const query = manualSearchQuery.trim();
+    if (!query) {
+      toast.error('Search query is compulsory! Please enter what to search (e.g. library, gym, area).', { icon: '⚠️' });
       return;
     }
 
     const hasRadius = searchRadius !== '' && Number(searchRadius) > 0;
     const hasLimit = searchLimit !== '' && Number(searchLimit) > 0;
 
-    const radiusVal = hasRadius ? Number(searchRadius) : (hasLimit ? null : 5000);
+    if (!hasRadius && !hasLimit) {
+      toast.error('Please select either KM Radius or Number of Places!', { icon: '📍' });
+      return;
+    }
+
+    const radiusVal = hasRadius ? Number(searchRadius) : null;
     const limitVal = hasLimit ? Number(searchLimit) : null;
-    performSearch(myLocation, activeCategory, manualSearchQuery, radiusVal, limitVal);
+    performSearch(myLocation, activeCategory, query, radiusVal, limitVal);
   };
 
   // ── Form helpers ───────────────────────────────────────────────────────────
@@ -1812,7 +1827,7 @@ export const FieldMarketing = () => {
             <div className="flex-1 min-w-[200px]">
               <input
                 type="text"
-                placeholder={activeCategory === 'gym' ? "Search gym name or city (e.g. Gold Gym, Guna)..." : "Search library name or city (e.g. Study point, Guna)..."}
+                placeholder={activeCategory === 'gym' ? "Enter gym name or city (Required)..." : "Enter library name or city (Required)..."}
                 value={manualSearchQuery}
                 onChange={(e) => setManualSearchQuery(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleManualSearch(e)}
