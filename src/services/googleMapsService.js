@@ -467,7 +467,6 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
   // 1. Direct REST Places API (New) with pagination and multi-query expansion
   if (apiKey) {
     try {
-      const hasSpecificLocation = query.split(/\s+/).length > 2;
       const isLargeOrUnlimited = !maxResults || Number(maxResults) === 0 || Number(maxResults) > 60;
       const isGym = query.toLowerCase().includes('gym') || query.toLowerCase().includes('fitness');
 
@@ -503,16 +502,26 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
             pageSize: 20,
           };
 
-          if (lat && lng && !hasSpecificLocation) {
-            const apiBiasRadius = (radius && Number(radius) > 0)
-              ? Math.min(Number(radius), 50000.0)
+          if (lat && lng) {
+            const apiRadiusMeters = (radius && Number(radius) > 0)
+              ? Number(radius)
               : 50000.0;
-            body.locationBias = {
-              circle: {
-                center: { latitude: lat, longitude: lng },
-                radius: apiBiasRadius,
-              },
-            };
+
+            if (apiRadiusMeters <= 50000.0) {
+              body.locationRestriction = {
+                circle: {
+                  center: { latitude: lat, longitude: lng },
+                  radius: apiRadiusMeters,
+                },
+              };
+            } else {
+              body.locationBias = {
+                circle: {
+                  center: { latitude: lat, longitude: lng },
+                  radius: 50000.0,
+                },
+              };
+            }
           }
 
           if (pageToken) {
@@ -578,10 +587,10 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
             };
           });
 
-        // If radius is specified, strictly filter by radius (with 15% boundary tolerance)
+        // Strictly filter by radius: Never return places beyond the user's selected radius
         if (lat && lng && radius && Number(radius) > 0) {
-          const maxDistanceWithTolerance = Number(radius) * 1.15;
-          formatted = formatted.filter((p) => p.distance == null || p.distance <= maxDistanceWithTolerance);
+          const maxRadiusMeters = Number(radius);
+          formatted = formatted.filter((p) => p.distance != null && p.distance <= maxRadiusMeters);
         }
 
         // 1. Sort ALL found places by straight-line distance from user's current location first
@@ -627,14 +636,12 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
 
   if (typeof google?.maps?.places?.Place?.searchByText === 'function') {
     try {
-      const hasSpecificLocation = query.split(/\s+/).length > 2;
-
       const { places } = await google.maps.places.Place.searchByText({
         textQuery: query,
         fields: ['id', 'displayName', 'formattedAddress', 'location', 'rating', 'userRatingCount', 'regularOpeningHours'],
-        locationBias: (lat && lng && !hasSpecificLocation) ? {
+        locationBias: (lat && lng) ? {
           center: { lat, lng },
-          radius: Number(radius) || 10000,
+          radius: Math.min(Number(radius) || 10000, 50000),
         } : undefined,
         maxResultCount: Math.min(maxResults, 20),
       });
@@ -661,8 +668,8 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
             };
           });
 
-        if (lat && lng && radius) {
-          formatted = formatted.filter((p) => p.distance == null || p.distance <= Number(radius) * 1.15);
+        if (lat && lng && radius && Number(radius) > 0) {
+          formatted = formatted.filter((p) => p.distance != null && p.distance <= Number(radius));
         }
 
         if (lat && lng) {
@@ -727,8 +734,8 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
               };
             });
 
-          if (lat && lng && radius) {
-            formatted = formatted.filter((p) => p.distance == null || p.distance <= Number(radius) * 1.15);
+          if (lat && lng && radius && Number(radius) > 0) {
+            formatted = formatted.filter((p) => p.distance != null && p.distance <= Number(radius));
           }
 
           formatted.sort((a, b) => a.distance - b.distance);

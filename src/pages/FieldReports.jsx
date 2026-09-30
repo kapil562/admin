@@ -678,6 +678,7 @@ export const FieldReports = () => {
       const lat = item.location?.latitude || '';
       const lng = item.location?.longitude || '';
       const mapsLink = lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : '';
+      const rKm = item.radiusKm != null ? (Number(item.radiusKm) >= 1000 ? Math.round(Number(item.radiusKm) / 1000) : Number(item.radiusKm)) : null;
       return [
         `"${dt.date}"`,
         `"${dt.time}"`,
@@ -685,7 +686,7 @@ export const FieldReports = () => {
         `"${item.staffRole || ''}"`,
         `"${(item.query || '').replace(/"/g, '""')}"`,
         `"${item.category || ''}"`,
-        `"${item.radiusKm != null ? item.radiusKm : 'Default'}"`,
+        `"${rKm != null ? `${rKm} km` : 'Default 50 km'}"`,
         `"${item.limitCount != null ? item.limitCount : 'Unlimited'}"`,
         `"${item.resultsCount || 0}"`,
         `"${(item.location?.locationName || '').replace(/"/g, '""')}"`,
@@ -1902,9 +1903,14 @@ export const FieldReports = () => {
                           {/* 3. Parameters (Radius & Limit) */}
                           <td className="py-3 px-4">
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-bold">
-                                📏 {item.radiusKm != null ? `${item.radiusKm} km radius` : 'Default 50 km'}
-                              </span>
+                              {(() => {
+                                const rKm = item.radiusKm != null ? (Number(item.radiusKm) >= 1000 ? Math.round(Number(item.radiusKm) / 1000) : Number(item.radiusKm)) : null;
+                                return (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-700 text-[10px] font-bold">
+                                    📏 {rKm != null ? `${rKm} km radius` : 'Default 50 km'}
+                                  </span>
+                                );
+                              })()}
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-bold">
                                 🎯 {item.limitCount != null ? `Max ${item.limitCount}` : 'Unlimited'}
                               </span>

@@ -13,6 +13,8 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
 import {
   Navigation,
+  Table as TableIcon,
+  LayoutGrid,
   MapPin,
   Building2,
   Phone,
@@ -237,8 +239,10 @@ const LIMIT_OPTIONS = [
 const DATE_FILTERS = [
   { id: 'all', label: 'All Time' },
   { id: 'today', label: 'Today' },
+  { id: 'day', label: 'Day Wise' },
   { id: 'week', label: 'This Week' },
-  { id: 'month', label: 'This Month' },
+  { id: 'month', label: 'Month Wise' },
+  { id: 'custom', label: 'Custom Date' },
 ];
 
 export const FieldMarketing = () => {
@@ -246,9 +250,20 @@ export const FieldMarketing = () => {
   const queryClient = useQueryClient();
 
   // Core state
+  const [viewMode, setViewMode] = useState('table'); // 'table' | 'cards'
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
   const [dateFilter, setDateFilter] = useState('all');
+  const [selectedDay, setSelectedDay] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  });
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
   const [selectedStaffFilter, setSelectedStaffFilter] = useState('All');
   const [showModal, setShowModal] = useState(false);
   const [editingVisit, setEditingVisit] = useState(null);
@@ -407,12 +422,27 @@ export const FieldMarketing = () => {
     }
   };
 
-  // Default coordinates: Guna, MP (Madhya Pradesh)
-  const DEFAULT_GUNA_COORDS = { latitude: 24.6465, longitude: 77.3188, accuracy: 100, isFallback: true };
-
   // ── Auto Search Runner ────────────────────────────────────────────────────
   const performSearch = useCallback(async (loc, category = activeCategory, customQuery = '', radius = searchRadius, limit = searchLimit) => {
-    const targetLoc = loc || myLocation || DEFAULT_GUNA_COORDS;
+    let targetLoc = loc || myLocation;
+
+    // If live GPS coordinates are not yet available, try to fetch current device GPS directly
+    if (!targetLoc) {
+      try {
+        toast.loading('Acquiring your live GPS location...', { id: 'gps-lock' });
+        targetLoc = await getCurrentGPSLocation();
+        setMyLocation(targetLoc);
+        const rev = await reverseGeocode(targetLoc.latitude, targetLoc.longitude);
+        const locName = rev.cityName || rev.formattedAddress || 'Your Live Location';
+        setCurrentLocationName(locName);
+        toast.dismiss('gps-lock');
+      } catch (gpsErr) {
+        toast.dismiss('gps-lock');
+        toast.error('Device GPS is required to find nearest places. Please enable location permission in your browser.');
+        return;
+      }
+    }
+
     setSearchingNearby(true);
     try {
       let query = (customQuery != null ? customQuery : manualSearchQuery).trim();
@@ -428,6 +458,7 @@ export const FieldMarketing = () => {
       try {
         const pagesCount = Math.ceil(resultsList.length / 20) || 1;
         const estimatedGrossInr = (pagesCount * 1.5 + 0.4).toFixed(2);
+        const radiusInKm = radius ? (Number(radius) >= 1000 ? Math.round(Number(radius) / 1000) : Number(radius)) : null;
         await logSearchAudit({
           staffId: user?.uid || user?.id || 'admin',
           staffName: user?.displayName || user?.name || (isSuperAdmin ? 'Admin' : 'Staff Member'),
@@ -435,7 +466,7 @@ export const FieldMarketing = () => {
           staffRole: user?.role || (isSuperAdmin ? 'Admin' : 'Staff'),
           query,
           category: category === 'gym' ? 'Gym' : 'Library',
-          radiusKm: radius ? Number(radius) : null,
+          radiusKm: radiusInKm,
           limitCount: limit ? Number(limit) : null,
           resultsCount: resultsList.length,
           pagesCount,
@@ -471,12 +502,11 @@ export const FieldMarketing = () => {
         toast.success(`GPS Connected: ${locName}`);
       }
     } catch (err) {
-      console.warn('GPS unavailable (HTTP or permission denied), using Guna, MP fallback:', err);
-      const fallbackLoc = DEFAULT_GUNA_COORDS;
-      setMyLocation(fallbackLoc);
-      setCurrentLocationName('Guna, MP (Default Location)');
+      console.warn('GPS unavailable:', err);
+      setMyLocation(null);
+      setCurrentLocationName('GPS Not Available (Location Permission Required)');
       if (isManual) {
-        toast('GPS not available on insecure HTTP. Using Guna, MP as location.', { icon: '📍' });
+        toast.error('Location permission denied or unavailable. Please enable device GPS in browser settings.');
       }
     }
   }, []);
@@ -512,19 +542,20 @@ export const FieldMarketing = () => {
       return;
     }
 
-    const loc = myLocation || DEFAULT_GUNA_COORDS;
     const radiusVal = hasRadius ? Number(searchRadius) : null;
     const limitVal = hasLimit ? Number(searchLimit) : null;
-    performSearch(loc, activeCategory, manualSearchQuery, radiusVal, limitVal);
+    performSearch(myLocation, activeCategory, manualSearchQuery, radiusVal, limitVal);
   };
 
   // ── Form helpers ───────────────────────────────────────────────────────────
-  const resetForm = () => {
+  const resetForm = (categoryOverride) => {
     const now = new Date();
     const liveTimeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
     const liveOutStr = new Date(now.getTime() + 20 * 60000).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const defaultCat = categoryOverride || (activeCategory === 'gym' ? 'Gym' : 'Library');
     setForm({
       ...initialFormState,
+      clientType: defaultCat,
       checkInTime: liveTimeStr,
       checkOutTime: liveOutStr,
     });
@@ -902,6 +933,16 @@ export const FieldMarketing = () => {
     );
   }, [visits, isSuperAdmin, selectedStaffFilter, user, allStaffAndAdmins]);
 
+  const extractVisitDateStr = (createdAt) => {
+    if (!createdAt) return '';
+    const d = new Date(createdAt);
+    if (isNaN(d.getTime())) return String(createdAt).slice(0, 10);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   const filteredVisits = useMemo(() => {
     const now = new Date();
     const todayUtc = now.toISOString().split('T')[0];
@@ -922,25 +963,37 @@ export const FieldMarketing = () => {
       const matchStatus = statusFilter === 'All' || v.status === statusFilter;
 
       let matchDate = true;
+      const vDateStr = extractVisitDateStr(v.createdAt);
+      const vMonthStr = vDateStr ? vDateStr.slice(0, 7) : '';
+      const vDate = v.createdAt ? new Date(v.createdAt) : null;
+      const vTime = vDate && !isNaN(vDate.getTime()) ? vDate.getTime() : 0;
+
       if (dateFilter === 'today') {
-        const vDate = v.createdAt ? new Date(v.createdAt) : null;
-        if (vDate && !isNaN(vDate.getTime())) {
-          const vLocal = `${vDate.getFullYear()}-${String(vDate.getMonth() + 1).padStart(2, '0')}-${String(vDate.getDate()).padStart(2, '0')}`;
-          matchDate = (v.createdAt || '').startsWith(todayUtc) || vLocal === todayLocal;
-        } else {
-          matchDate = (v.createdAt || '').startsWith(todayUtc);
+        matchDate = (v.createdAt || '').startsWith(todayUtc) || vDateStr === todayLocal;
+      } else if (dateFilter === 'day') {
+        if (selectedDay) {
+          matchDate = vDateStr === selectedDay || (v.createdAt || '').startsWith(selectedDay);
         }
       } else if (dateFilter === 'week') {
-        const vTime = v.createdAt ? new Date(v.createdAt).getTime() : 0;
         matchDate = vTime >= oneWeekAgoMs;
       } else if (dateFilter === 'month') {
-        const vTime = v.createdAt ? new Date(v.createdAt).getTime() : 0;
-        matchDate = vTime >= startOfMonth;
+        if (selectedMonth) {
+          matchDate = vMonthStr === selectedMonth || (v.createdAt || '').startsWith(selectedMonth);
+        } else {
+          matchDate = vTime >= startOfMonth;
+        }
+      } else if (dateFilter === 'custom') {
+        if (customStartDate && vDateStr && vDateStr < customStartDate) {
+          matchDate = false;
+        }
+        if (customEndDate && vDateStr && vDateStr > customEndDate) {
+          matchDate = false;
+        }
       }
 
       return matchSearch && matchStatus && matchDate;
     });
-  }, [baseVisits, search, statusFilter, dateFilter]);
+  }, [baseVisits, search, statusFilter, dateFilter, selectedDay, selectedMonth, customStartDate, customEndDate]);
 
   // Dynamic status counts reflecting current search & date filter
   const statusCounts = useMemo(() => {
@@ -972,20 +1025,28 @@ export const FieldMarketing = () => {
       if (!matchSearch) return;
 
       let matchDate = true;
+      const vDateStr = extractVisitDateStr(v.createdAt);
+      const vMonthStr = vDateStr ? vDateStr.slice(0, 7) : '';
+      const vDate = v.createdAt ? new Date(v.createdAt) : null;
+      const vTime = vDate && !isNaN(vDate.getTime()) ? vDate.getTime() : 0;
+
       if (dateFilter === 'today') {
-        const vDate = v.createdAt ? new Date(v.createdAt) : null;
-        if (vDate && !isNaN(vDate.getTime())) {
-          const vLocal = `${vDate.getFullYear()}-${String(vDate.getMonth() + 1).padStart(2, '0')}-${String(vDate.getDate()).padStart(2, '0')}`;
-          matchDate = (v.createdAt || '').startsWith(todayUtc) || vLocal === todayLocal;
-        } else {
-          matchDate = (v.createdAt || '').startsWith(todayUtc);
+        matchDate = (v.createdAt || '').startsWith(todayUtc) || vDateStr === todayLocal;
+      } else if (dateFilter === 'day') {
+        if (selectedDay) {
+          matchDate = vDateStr === selectedDay || (v.createdAt || '').startsWith(selectedDay);
         }
       } else if (dateFilter === 'week') {
-        const vTime = v.createdAt ? new Date(v.createdAt).getTime() : 0;
         matchDate = vTime >= oneWeekAgoMs;
       } else if (dateFilter === 'month') {
-        const vTime = v.createdAt ? new Date(v.createdAt).getTime() : 0;
-        matchDate = vTime >= startOfMonth;
+        if (selectedMonth) {
+          matchDate = vMonthStr === selectedMonth || (v.createdAt || '').startsWith(selectedMonth);
+        } else {
+          matchDate = vTime >= startOfMonth;
+        }
+      } else if (dateFilter === 'custom') {
+        if (customStartDate && vDateStr && vDateStr < customStartDate) matchDate = false;
+        if (customEndDate && vDateStr && vDateStr > customEndDate) matchDate = false;
       }
 
       if (!matchDate) return;
@@ -997,11 +1058,11 @@ export const FieldMarketing = () => {
     });
 
     return counts;
-  }, [baseVisits, search, dateFilter]);
+  }, [baseVisits, search, dateFilter, selectedDay, selectedMonth, customStartDate, customEndDate]);
 
   // Dynamic date counts reflecting current search & status filter
   const dateCounts = useMemo(() => {
-    const counts = { all: 0, today: 0, week: 0, month: 0 };
+    const counts = { all: 0, today: 0, day: 0, week: 0, month: 0, custom: 0 };
     const now = new Date();
     const todayUtc = now.toISOString().split('T')[0];
     const todayLocal = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -1024,40 +1085,53 @@ export const FieldMarketing = () => {
 
       counts.all += 1;
 
+      const vDateStr = extractVisitDateStr(v.createdAt);
+      const vMonthStr = vDateStr ? vDateStr.slice(0, 7) : '';
       const vDate = v.createdAt ? new Date(v.createdAt) : null;
       const vTime = vDate && !isNaN(vDate.getTime()) ? vDate.getTime() : 0;
 
-      if (vDate && !isNaN(vDate.getTime())) {
-        const vLocal = `${vDate.getFullYear()}-${String(vDate.getMonth() + 1).padStart(2, '0')}-${String(vDate.getDate()).padStart(2, '0')}`;
-        if ((v.createdAt || '').startsWith(todayUtc) || vLocal === todayLocal) {
-          counts.today += 1;
-        }
-      } else if ((v.createdAt || '').startsWith(todayUtc)) {
+      if ((v.createdAt || '').startsWith(todayUtc) || vDateStr === todayLocal) {
         counts.today += 1;
       }
-
+      if (selectedDay && (vDateStr === selectedDay || (v.createdAt || '').startsWith(selectedDay))) {
+        counts.day += 1;
+      }
       if (vTime >= oneWeekAgoMs) {
         counts.week += 1;
       }
-      if (vTime >= startOfMonth) {
+      if (selectedMonth) {
+        if (vMonthStr === selectedMonth || (v.createdAt || '').startsWith(selectedMonth)) {
+          counts.month += 1;
+        }
+      } else if (vTime >= startOfMonth) {
         counts.month += 1;
+      }
+      let matchCustom = true;
+      if (customStartDate && vDateStr && vDateStr < customStartDate) matchCustom = false;
+      if (customEndDate && vDateStr && vDateStr > customEndDate) matchCustom = false;
+      if (matchCustom && (customStartDate || customEndDate)) {
+        counts.custom += 1;
       }
     });
 
     return counts;
-  }, [baseVisits, search, statusFilter]);
+  }, [baseVisits, search, statusFilter, selectedDay, selectedMonth, customStartDate, customEndDate]);
 
   const isFilterActive =
     search.trim() !== '' ||
     statusFilter !== 'All' ||
     dateFilter !== 'all' ||
-    selectedStaffFilter !== 'All';
+    selectedStaffFilter !== 'All' ||
+    customStartDate !== '' ||
+    customEndDate !== '';
 
   const handleClearAllFilters = () => {
     setSearch('');
     setStatusFilter('All');
     setDateFilter('all');
     setSelectedStaffFilter('All');
+    setCustomStartDate('');
+    setCustomEndDate('');
   };
 
   // Stats
@@ -1167,6 +1241,320 @@ export const FieldMarketing = () => {
       return () => document.removeEventListener('click', handleClick);
     }
   }, [statusDropdownId]);
+
+  // ── Table View for PC / Desktop ──────────────────────────────────────────
+  const renderTableView = () => (
+    <div className="overflow-x-auto border border-slate-200/80 rounded-2xl bg-white shadow-xs">
+      <table className="w-full text-left border-collapse">
+        <thead>
+          <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-black text-slate-500 uppercase tracking-wider">
+            <th className="px-4 py-3.5">Business / Client</th>
+            <th className="px-4 py-3.5">Owner / Contact</th>
+            <th className="px-4 py-3.5">Status</th>
+            <th className="px-4 py-3.5">Software / Demo</th>
+            <th className="px-4 py-3.5">Discussion Notes</th>
+            <th className="px-4 py-3.5">Logged By & Time</th>
+            <th className="px-4 py-3.5">GPS Verification</th>
+            <th className="px-4 py-3.5 text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100 text-xs">
+          {filteredVisits.map((visit) => {
+            const visitNum = getVisitNumber(visit);
+            const isAdm =
+              (visit.staffName || '').toLowerCase().includes('admin') ||
+              (visit.staffName || '').toLowerCase().includes('owner') ||
+              String(visit.staffId || '').toLowerCase().includes('admin');
+            const auth = evaluateVisitAuthenticity(visit);
+            const sync = evaluateSyncDelay(visit.checkInTime, visit.createdAt);
+            const entryTime = formatDateTime(visit.createdAt);
+
+            return (
+              <tr
+                key={visit.id}
+                className={`hover:bg-slate-50/80 transition-colors ${
+                  visit.status === 'Deal Closed' ? 'bg-emerald-50/20' : ''
+                }`}
+              >
+                {/* 1. Business / Client */}
+                <td className="px-4 py-3.5 align-top">
+                  <div className="flex items-start gap-3">
+                    {visit.photoUrl ? (
+                      <div
+                        onClick={() => setPreviewPhotoUrl(visit.photoUrl)}
+                        className="relative w-10 h-10 rounded-lg overflow-hidden border border-slate-200 cursor-pointer shrink-0 group shadow-2xs"
+                        title="Click to view full photo"
+                      >
+                        <img src={visit.photoUrl} alt="" className="w-full h-full object-cover group-hover:scale-110 transition duration-200" />
+                        <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
+                          <Camera size={12} className="text-white" />
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        className={`w-10 h-10 rounded-lg flex items-center justify-center font-black text-sm shrink-0 shadow-2xs ${
+                          visit.status === 'Deal Closed'
+                            ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                            : 'bg-blue-50 text-blue-600 border border-blue-100'
+                        }`}
+                      >
+                        <Building2 size={18} />
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p
+                        onClick={() => setSelectedVisit(visit)}
+                        className="font-black text-slate-900 text-xs truncate hover:text-blue-600 cursor-pointer max-w-[200px]"
+                        title={visit.businessName}
+                      >
+                        {visit.businessName}
+                      </p>
+                      <p className="text-[11px] text-slate-400 font-semibold truncate max-w-[200px] mt-0.5">
+                        {visit.clientType} · {visit.city || 'City'}
+                      </p>
+                      <div className="flex items-center gap-1 mt-1 flex-wrap">
+                        {visit.seatCapacity && (
+                          <span className="text-[9px] text-slate-600 bg-slate-100 px-1 py-0.2 rounded font-bold">
+                            🪑 {visit.seatCapacity}
+                          </span>
+                        )}
+                        {visitNum > 1 ? (
+                          <span className="text-[9px] font-black text-indigo-700 bg-indigo-50 px-1.5 py-0.2 rounded border border-indigo-200">
+                            Re-Visit #{visitNum}
+                          </span>
+                        ) : (
+                          <span className="text-[9px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded">
+                            Visit #1
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </td>
+
+                {/* 2. Owner / Contact */}
+                <td className="px-4 py-3.5 align-top whitespace-nowrap">
+                  <div>
+                    <p className="text-xs font-bold text-slate-800">
+                      {visit.ownerName || 'Owner'}
+                      {visit.personMet && (
+                        <span className="ml-1 text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200">
+                          {visit.personMet.split(' ')[0]}
+                        </span>
+                      )}
+                    </p>
+                    {visit.phone ? (
+                      <div className="flex items-center gap-1.5 mt-1">
+                        <span className="text-[11px] text-slate-500 font-medium">{visit.phone}</span>
+                        <a
+                          href={`tel:${visit.phone}`}
+                          className="w-5 h-5 rounded bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 hover:bg-blue-100 transition"
+                          title="Call"
+                        >
+                          <PhoneCall size={10} />
+                        </a>
+                        <a
+                          href={`https://wa.me/91${visit.phone.replace(/\D/g, '')}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-5 h-5 rounded bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600 hover:bg-emerald-100 transition"
+                          title="WhatsApp"
+                        >
+                          <MessageCircle size={10} />
+                        </a>
+                      </div>
+                    ) : (
+                      <span className="text-[10px] text-slate-400 italic">No phone</span>
+                    )}
+                  </div>
+                </td>
+
+                {/* 3. Status */}
+                <td className="px-4 py-3.5 align-top whitespace-nowrap">
+                  <div className="relative inline-block">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setStatusDropdownId(statusDropdownId === visit.id ? null : visit.id);
+                      }}
+                      className="flex items-center gap-1 cursor-pointer"
+                    >
+                      <Badge variant={getStatusBadgeVariant(visit.status)} size="sm">
+                        {visit.status}
+                      </Badge>
+                      <ChevronDown size={11} className="text-slate-400" />
+                    </button>
+                    {statusDropdownId === visit.id && (
+                      <div
+                        className="absolute z-30 top-full left-0 mt-1 bg-white rounded-xl border border-slate-200 shadow-xl p-1.5 w-48"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {VISIT_STATUSES.map((s) => (
+                          <button
+                            key={s.id}
+                            onClick={() => statusMutation.mutate({ id: visit.id, status: s.id })}
+                            className={`w-full text-left px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
+                              visit.status === s.id
+                                ? 'bg-blue-50 text-blue-700'
+                                : 'hover:bg-slate-50 text-slate-700'
+                            }`}
+                          >
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {visit.followUpDate && (
+                    <p className="text-[10px] text-amber-800 font-bold mt-1 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 w-fit">
+                      ⏰ {visit.followUpDate}
+                    </p>
+                  )}
+                </td>
+
+                {/* 4. Software / Demo */}
+                <td className="px-4 py-3.5 align-top whitespace-nowrap">
+                  <div className="space-y-1">
+                    {visit.currentSoftwareType === 'Competitor Software' ? (
+                      <div>
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded">
+                          💻 {visit.competitorName || 'Competitor'}
+                        </span>
+                        {visit.competitorExpiryDate && (
+                          <span className="block text-[9px] text-amber-700 mt-0.5">
+                            Exp: {visit.competitorExpiryDate}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-[10px] text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                        {visit.currentSoftwareType || 'Manual Register'}
+                      </span>
+                    )}
+                    {visit.demoGiven && (
+                      <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                        <Check size={9} /> Demo Given
+                      </span>
+                    )}
+                  </div>
+                </td>
+
+                {/* 5. Discussion Notes */}
+                <td className="px-4 py-3.5 align-top max-w-[240px]">
+                  {visit.discussionNotes ? (
+                    <p className="text-[11px] text-slate-600 line-clamp-2 leading-snug" title={visit.discussionNotes}>
+                      "{visit.discussionNotes}"
+                    </p>
+                  ) : (
+                    <span className="text-[11px] text-slate-400 italic">No notes</span>
+                  )}
+                  {visit.nextActionItem && (
+                    <p className="text-[10px] text-amber-800 font-semibold line-clamp-1 mt-0.5">
+                      🎯 {visit.nextActionItem}
+                    </p>
+                  )}
+                </td>
+
+                {/* 6. Logged By & Time */}
+                <td className="px-4 py-3.5 align-top whitespace-nowrap">
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`w-6 h-6 rounded-md font-black text-xs flex items-center justify-center shrink-0 ${
+                        isAdm ? 'bg-amber-100 text-amber-800 border border-amber-300' : 'bg-blue-100 text-blue-800'
+                      }`}
+                    >
+                      {isAdm ? <Crown size={12} className="text-amber-700" /> : (visit.staffName || 'S').substring(0, 1).toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold text-slate-800 truncate">
+                        {visit.staffName || 'Staff'}
+                        {isAdm && <span className="ml-1 text-[8px] uppercase bg-amber-100 text-amber-800 px-1 rounded font-bold">Admin</span>}
+                      </p>
+                      <p className="text-[10px] text-blue-700 font-bold mt-0.5">
+                        {entryTime.time} <span className="text-slate-400 font-normal">({entryTime.date})</span>
+                      </p>
+                    </div>
+                  </div>
+                </td>
+
+                {/* 7. GPS Verification */}
+                <td className="px-4 py-3.5 align-top whitespace-nowrap">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1">
+                      <span className={`text-[9px] font-black px-1.5 py-0.2 rounded border ${sync.badgeClass}`}>
+                        {sync.label}
+                      </span>
+                      <span className={`px-1.5 py-0.2 rounded text-[9px] font-black border inline-flex items-center gap-0.5 ${auth.badgeClass}`}>
+                        {auth.isGenuine ? <ShieldCheck size={9} className="text-emerald-700" /> : <ShieldAlert size={9} />}
+                        {auth.statusText}
+                      </span>
+                    </div>
+                    {visit.location ? (
+                      <a
+                        href={visit.location.mapsUrl || `https://www.google.com/maps?q=${visit.location.latitude},${visit.location.longitude}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200"
+                        title="Open GPS location in Google Maps"
+                      >
+                        <MapPin size={10} /> View GPS
+                      </a>
+                    ) : (
+                      <span className="text-[9px] text-rose-500 font-bold">No GPS ⚠️</span>
+                    )}
+                  </div>
+                </td>
+
+                {/* 8. Actions */}
+                <td className="px-4 py-3.5 align-top text-right whitespace-nowrap">
+                  <div className="flex items-center justify-end gap-1">
+                    <button
+                      onClick={() => setSelectedVisit(visit)}
+                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-bold rounded-lg transition cursor-pointer"
+                      title="Inspect full details"
+                    >
+                      Inspect
+                    </button>
+                    {hasPermission('marketing', 'create') && (
+                      <button
+                        onClick={() => openEditVisit(visit)}
+                        className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition cursor-pointer"
+                        title="Edit Record"
+                      >
+                        <Edit3 size={13} />
+                      </button>
+                    )}
+                    {hasPermission('marketing', 'create') && (
+                      <button
+                        onClick={() => openReVisit(visit)}
+                        className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition cursor-pointer"
+                        title="Log Re-Visit"
+                      >
+                        <RotateCcw size={13} />
+                      </button>
+                    )}
+                    {hasPermission('marketing', 'delete') && (
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Delete visit record for "${visit.businessName}"?`)) {
+                            deleteMutation.mutate(visit.id);
+                          }
+                        }}
+                        className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                        title="Delete Record"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
 
   if (isLoading) {
     return <LoadingSpinner fullScreen label="Loading field marketing data..." />;
@@ -1854,6 +2242,123 @@ export const FieldMarketing = () => {
             </div>
           </div>
 
+          {/* Sub-bar for Day Wise / Month Wise / Custom Date Pickers */}
+          {dateFilter === 'day' && (
+            <div className="flex items-center gap-2.5 px-3 py-2 bg-indigo-50/70 border border-indigo-100 rounded-xl text-xs flex-wrap">
+              <span className="font-extrabold text-indigo-900 flex items-center gap-1.5 shrink-0">
+                <Calendar size={13} className="text-indigo-600" />
+                <span>Select Day:</span>
+              </span>
+              <input
+                type="date"
+                value={selectedDay}
+                onChange={(e) => setSelectedDay(e.target.value)}
+                className="px-2.5 py-1 bg-white border border-indigo-200 rounded-lg text-xs font-bold text-slate-800 outline-none shadow-2xs focus:border-indigo-500 cursor-pointer"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const now = new Date();
+                  setSelectedDay(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`);
+                }}
+                className="px-2.5 py-1 bg-white hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg border border-indigo-200 text-[11px] cursor-pointer transition"
+              >
+                Today
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const yest = new Date(Date.now() - 86400000);
+                  setSelectedDay(`${yest.getFullYear()}-${String(yest.getMonth() + 1).padStart(2, '0')}-${String(yest.getDate()).padStart(2, '0')}`);
+                }}
+                className="px-2.5 py-1 bg-white hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg border border-indigo-200 text-[11px] cursor-pointer transition"
+              >
+                Yesterday
+              </button>
+              <span className="text-[11px] font-bold text-indigo-700/80 sm:ml-auto">
+                Showing visits for: <span className="font-black text-indigo-950">{selectedDay || 'Selected date'}</span>
+              </span>
+            </div>
+          )}
+
+          {dateFilter === 'month' && (
+            <div className="flex items-center gap-2.5 px-3 py-2 bg-indigo-50/70 border border-indigo-100 rounded-xl text-xs flex-wrap">
+              <span className="font-extrabold text-indigo-900 flex items-center gap-1.5 shrink-0">
+                <Calendar size={13} className="text-indigo-600" />
+                <span>Select Month:</span>
+              </span>
+              <input
+                type="month"
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                className="px-2.5 py-1 bg-white border border-indigo-200 rounded-lg text-xs font-bold text-slate-800 outline-none shadow-2xs focus:border-indigo-500 cursor-pointer"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const now = new Date();
+                  setSelectedMonth(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`);
+                }}
+                className="px-2.5 py-1 bg-white hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg border border-indigo-200 text-[11px] cursor-pointer transition"
+              >
+                This Month
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const now = new Date();
+                  const lastM = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                  setSelectedMonth(`${lastM.getFullYear()}-${String(lastM.getMonth() + 1).padStart(2, '0')}`);
+                }}
+                className="px-2.5 py-1 bg-white hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg border border-indigo-200 text-[11px] cursor-pointer transition"
+              >
+                Last Month
+              </button>
+              <span className="text-[11px] font-bold text-indigo-700/80 sm:ml-auto">
+                Showing visits for: <span className="font-black text-indigo-950">{selectedMonth || 'Selected month'}</span>
+              </span>
+            </div>
+          )}
+
+          {dateFilter === 'custom' && (
+            <div className="flex items-center gap-2.5 px-3 py-2 bg-indigo-50/70 border border-indigo-100 rounded-xl text-xs flex-wrap">
+              <span className="font-extrabold text-indigo-900 flex items-center gap-1.5 shrink-0">
+                <Calendar size={13} className="text-indigo-600" />
+                <span>Custom Date Range:</span>
+              </span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-slate-600">From:</span>
+                <input
+                  type="date"
+                  value={customStartDate}
+                  onChange={(e) => setCustomStartDate(e.target.value)}
+                  className="px-2.5 py-1 bg-white border border-indigo-200 rounded-lg text-xs font-bold text-slate-800 outline-none shadow-2xs focus:border-indigo-500 cursor-pointer"
+                />
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-bold text-slate-600">To:</span>
+                <input
+                  type="date"
+                  value={customEndDate}
+                  onChange={(e) => setCustomEndDate(e.target.value)}
+                  className="px-2.5 py-1 bg-white border border-indigo-200 rounded-lg text-xs font-bold text-slate-800 outline-none shadow-2xs focus:border-indigo-500 cursor-pointer"
+                />
+              </div>
+              {(customStartDate || customEndDate) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomStartDate('');
+                    setCustomEndDate('');
+                  }}
+                  className="px-2.5 py-1 text-slate-500 hover:text-slate-800 text-xs font-bold underline cursor-pointer"
+                >
+                  Clear Range
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Status Filters */}
           <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
             <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 shrink-0 flex items-center gap-1">
@@ -1892,15 +2397,55 @@ export const FieldMarketing = () => {
 
       {/* ═══ SECTION C: Visits Card Grid ═══ */}
       <div>
-        {/* Section header row */}
-        <div className="flex items-center justify-between mb-3 px-1">
+        {/* Section header row with Table/Cards toggle for PC */}
+        <div className="flex items-center justify-between mb-3 px-1 flex-wrap gap-2">
           <p className="text-xs font-black text-slate-500 uppercase tracking-widest">
             {filteredVisits.length} Visit{filteredVisits.length !== 1 ? 's' : ''} Found
           </p>
+
+          {/* Desktop View Switcher: Table vs Cards (Hidden on mobile; mobile strictly shows Cards) */}
+          <div className="hidden md:flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 gap-1 shadow-2xs">
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                viewMode === 'table'
+                  ? 'bg-white text-blue-700 shadow-xs border border-slate-200/80 font-black'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+              title="Table View (Compact for PC)"
+            >
+              <TableIcon size={14} />
+              <span>Table</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('cards')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                viewMode === 'cards'
+                  ? 'bg-white text-blue-700 shadow-xs border border-slate-200/80 font-black'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+              }`}
+              title="Cards View (Detailed Cards)"
+            >
+              <LayoutGrid size={14} />
+              <span>Cards</span>
+            </button>
+          </div>
         </div>
 
         {filteredVisits.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+          <>
+            {/* Desktop Table View (Rendered on PC when viewMode is 'table') */}
+            {viewMode === 'table' && (
+              <div className="hidden md:block mb-4">
+                {renderTableView()}
+              </div>
+            )}
+
+            {/* Cards View (Rendered on PC when viewMode is 'cards', and ALWAYS rendered on mobile) */}
+            <div className={viewMode === 'table' ? 'block md:hidden' : 'block'}>
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             {filteredVisits.map((visit) => {
               const visitNum = getVisitNumber(visit);
               const isAdm =
@@ -2199,7 +2744,9 @@ export const FieldMarketing = () => {
                 </div>
               );
             })}
-          </div>
+              </div>
+            </div>
+          </>
         ) : (
           <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-10">
             <EmptyState
