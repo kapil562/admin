@@ -623,9 +623,13 @@ export const FieldMarketing = () => {
 
       const hasRadius = radius && Number(radius) > 0;
       const hasLimit = limit && Number(limit) > 0;
-      const targetLimit = hasLimit ? Number(limit) : 20; // Default to 20 places if not specified (strictly 1 API call)
+      const targetLimit = hasLimit ? Number(limit) : 1000;
 
-      // Single targeted query - consumes only 1 API call (or 2-3 if targetLimit > 20)
+      const detectedCityName = isCityOrCorridor
+        ? targetCity
+        : (currentLocationName ? currentLocationName.replace(/\s*\(Default Location\)/gi, '').split(',')[0].trim() : '');
+
+      // Single targeted query - consumes only needed API calls
       const res = await searchLibrariesByText(query, searchLat, searchLng, hasRadius ? Number(radius) : null, targetLimit);
       const resultsList = (res || []).map((p) => {
         let distMeters = p.distance;
@@ -641,7 +645,7 @@ export const FieldMarketing = () => {
           ...p,
           distance: distMeters,
           distanceFormatted: distFormatted || p.distanceFormatted,
-          locality: p.locality || extractLocality(p.address, query || currentLocationName),
+          locality: p.locality || extractLocality(p.address, detectedCityName),
         };
       });
 
@@ -1366,18 +1370,22 @@ export const FieldMarketing = () => {
     [visits]
   );
 
+  const activeCityName = useMemo(() => {
+    return currentLocationName ? currentLocationName.replace(/\s*\(Default Location\)/gi, '').split(',')[0].trim() : '';
+  }, [currentLocationName]);
+
   // Area / Locality Breakdown for discovery places (Konsa area ma kitni library ha)
   const nearbyAreaBreakdown = useMemo(() => {
     if (!nearbyLibraries || nearbyLibraries.length === 0) return [];
     const counts = {};
     nearbyLibraries.forEach((p) => {
-      const loc = p.locality || extractLocality(p.address, manualSearchQuery || currentLocationName);
+      const loc = p.locality || extractLocality(p.address, activeCityName);
       counts[loc] = (counts[loc] || 0) + 1;
     });
     return Object.entries(counts)
       .map(([area, count]) => ({ area, count }))
       .sort((a, b) => b.count - a.count);
-  }, [nearbyLibraries, manualSearchQuery, currentLocationName]);
+  }, [nearbyLibraries, activeCityName]);
 
   // Computed Visited vs Unvisited for discovery places
   const nearbyCounts = useMemo(() => {
@@ -1385,7 +1393,7 @@ export const FieldMarketing = () => {
     let unvisited = 0;
     const targetList = selectedNearbyArea === 'All'
       ? nearbyLibraries
-      : nearbyLibraries.filter((p) => (p.locality || extractLocality(p.address, manualSearchQuery || currentLocationName)) === selectedNearbyArea);
+      : nearbyLibraries.filter((p) => (p.locality || extractLocality(p.address, activeCityName)) === selectedNearbyArea);
 
     targetList.forEach((place) => {
       const history = getPlaceVisitHistory(place.placeId, place.name);
@@ -1393,12 +1401,12 @@ export const FieldMarketing = () => {
       else unvisited++;
     });
     return { all: targetList.length, unvisited, visited };
-  }, [nearbyLibraries, selectedNearbyArea, getPlaceVisitHistory, manualSearchQuery, currentLocationName]);
+  }, [nearbyLibraries, selectedNearbyArea, getPlaceVisitHistory, activeCityName]);
 
   const filteredNearbyLibraries = useMemo(() => {
     return nearbyLibraries.filter((place) => {
       if (selectedNearbyArea !== 'All') {
-        const loc = place.locality || extractLocality(place.address, manualSearchQuery || currentLocationName);
+        const loc = place.locality || extractLocality(place.address, activeCityName);
         if (loc !== selectedNearbyArea) return false;
       }
       const isVisited = getPlaceVisitHistory(place.placeId, place.name).length > 0;
@@ -1406,7 +1414,7 @@ export const FieldMarketing = () => {
       if (nearbyVisitFilter === 'visited') return isVisited;
       return true;
     });
-  }, [nearbyLibraries, selectedNearbyArea, nearbyVisitFilter, getPlaceVisitHistory, manualSearchQuery, currentLocationName]);
+  }, [nearbyLibraries, selectedNearbyArea, nearbyVisitFilter, getPlaceVisitHistory, activeCityName]);
 
   // Visit count per place or business name (Visit #1, Visit #2, etc.)
   const getVisitNumber = useCallback(
@@ -2330,7 +2338,7 @@ export const FieldMarketing = () => {
                               <div className="flex items-center gap-1.5 flex-wrap mt-1">
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 font-bold text-[10px] border border-blue-100/80">
                                   <MapPin size={10} className="text-blue-500" />
-                                  {place.locality || extractLocality(place.address, manualSearchQuery || currentLocationName)}
+                                  {place.locality || extractLocality(place.address, activeCityName)}
                                 </span>
                                 {place.phone && (
                                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600 font-semibold text-[10px]">

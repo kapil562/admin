@@ -78,20 +78,48 @@ export const extractLocality = (address = '', cityName = '') => {
   if (lower.includes('bengali') || lower.includes('khajrana') || lower.includes('kanadia') || lower.includes('bypass')) return 'Bypass, Bengali & Khajrana';
   if (lower.includes('mhow') || lower.includes('ambedkar nagar')) return 'Mhow / Dr. Ambedkar Nagar';
 
+  // Specific common hubs in tier-2 / tier-3 cities (e.g. Burhanpur, Khandwa, Kota)
+  if (lower.includes('lalbagh') || lower.includes('lal bagh')) return 'Lalbagh Area';
+  if (lower.includes('shanwara') || lower.includes('shanware')) return 'Shanwara Gate / Market';
+  if (lower.includes('sindhi basti')) return 'Sindhi Basti';
+  if (lower.includes('shikarpura')) return 'Shikarpura';
+  if (lower.includes('rastipura')) return 'Rastipura';
+  if (lower.includes('subhash chowk')) return 'Subhash Chowk';
+  if (lower.includes('station road') || lower.includes('railway station')) return 'Station Road Area';
+  if (lower.includes('dawoodi') || lower.includes('bohra')) return 'Dawoodi / Bohra Colony';
+
   const parts = address.split(',').map((p) => p.trim()).filter(Boolean);
   if (parts.length <= 1) return address;
 
-  // Filter out country ("India"), pincode, and city name
+  // Clean out search words from cityName (e.g. "library", "gym")
+  const cleanCity = (cityName || '').replace(/\b(library|libraries|gym|gyms|reading room|coaching|fitness)\b/gi, '').trim();
+
+  // Known city names to reject as "locality" so city name itself is not returned as area
+  const COMMON_CITIES = /\b(burhanpur|khandwa|indore|bhopal|gwalior|jabalpur|ujjain|dewas|ratlam|sagar|rewa|satna|kota|jaipur|delhi|mumbai|pune|nagpur|ahmedabad|surat|lucknow|kanpur|agra|patna|varanasi|prayagraj)\b/i;
+
+  // Filter out country, state, pincode, plus-codes, and city names
   const filtered = parts.filter((part) => {
-    if (/india/i.test(part)) return false;
+    if (/india|bharat/i.test(part)) return false;
     if (/\b\d{6}\b/.test(part)) return false;
-    if (cityName && new RegExp(cityName, 'i').test(part)) return false;
-    if (/(madhya pradesh|rajasthan|uttar pradesh|delhi|gujarat|maharashtra|haryana)/i.test(part)) return false;
+    if (/^[A-Z0-9]{4,8}\+[A-Z0-9]{2,4}/i.test(part)) return false; // Google plus code
+    if (/^\d+[\s\w]*$/i.test(part) && part.length < 5) return false; // House/plot number like "Plot 4" or "12"
+    if (/(madhya pradesh|m\.?p\.?|rajasthan|uttar pradesh|u\.?p\.?|delhi|gujarat|maharashtra|haryana)/i.test(part)) return false;
+    if (cleanCity && new RegExp(cleanCity, 'i').test(part)) return false;
+    if (COMMON_CITIES.test(part)) return false;
     return true;
   });
 
-  if (filtered.length === 0) return 'City Core';
-  return filtered[filtered.length - 1] || filtered[0];
+  if (filtered.length === 0) {
+    // Fallback: Return first part of address or City Core
+    const firstPart = parts[0] || '';
+    if (firstPart && !COMMON_CITIES.test(firstPart) && !/\b\d{6}\b/.test(firstPart)) {
+      return firstPart;
+    }
+    return cleanCity ? `${cleanCity} Central` : 'City Center';
+  }
+
+  // Choose the best locality component: usually the last element before city (colony/area)
+  return filtered[filtered.length - 1];
 };
 
 /**
