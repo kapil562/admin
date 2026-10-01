@@ -20,6 +20,7 @@ import { FieldReports } from './pages/FieldReports';
 import { StaffAttendance } from './pages/StaffAttendance';
 import { StaffManagement } from './pages/StaffManagement';
 import { CouponsManagement } from './pages/CouponsManagement';
+import { MarketResearch } from './pages/MarketResearch';
 
 
 const queryClient = new QueryClient({
@@ -60,6 +61,7 @@ export default function App() {
               }
             >
               <Route path="/" element={<Dashboard />} />
+              <Route path="/market-research" element={<MarketResearch />} />
               <Route path="/marketing" element={<FieldMarketing />} />
               <Route path="/field-reports" element={<FieldReports />} />
               <Route path="/attendance" element={<StaffAttendance />} />

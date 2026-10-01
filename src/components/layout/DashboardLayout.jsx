@@ -20,6 +20,7 @@ import {
   CalendarCheck,
   UserCog,
   ShieldAlert,
+  Compass,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -34,6 +35,7 @@ const navigationGroups = [
   {
     title: 'FIELD SALES & MARKETING',
     items: [
+      { name: 'Market Research', path: '/market-research', icon: Compass, module: 'marketing' },
       { name: 'Field Visits (GPS)', path: '/marketing', icon: Navigation, module: 'marketing' },
       { name: 'Field Reports', path: '/field-reports', icon: ClipboardList, module: 'marketing' },
       { name: 'Staff Duty & Hours', path: '/attendance', icon: CalendarCheck, module: 'attendance' },

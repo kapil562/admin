@@ -73,10 +73,13 @@ export const StatCard = ({
             {trend && (
               <span
                 className={`font-bold flex items-center gap-0.5 ${
-                  trendPositive ? 'text-emerald-600' : 'text-rose-600'
+                  (typeof trend === 'object' && trend !== null ? (trend.positive ?? trendPositive) : trendPositive)
+                    ? 'text-emerald-600'
+                    : 'text-rose-600'
                 }`}
               >
-                {trendPositive ? '↑' : '↓'} {trend}
+                {(typeof trend === 'object' && trend !== null ? (trend.positive ?? trendPositive) : trendPositive) ? '↑' : '↓'}{' '}
+                {typeof trend === 'object' && trend !== null ? trend.text : trend}
               </span>
             )}
             {subtitle && <span className="truncate">{subtitle}</span>}

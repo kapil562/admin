@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getFieldVisits, logFieldVisit, updateFieldVisit, updateVisitStatus, deleteFieldVisit, getCurrentGPSLocation, logSearchAudit } from '../firebase/services/marketingService';
 import { getStaffUsers, calculateStaffPayroll } from '../firebase/services/staffService';
-import { searchNearbyLibraries, searchLibrariesByText, formatDistance, getNavigationUrl, getPlaceMapUrl, geocodeAddress, reverseGeocode, parseAddressDetails, getPlaceDetails } from '../services/googleMapsService';
+import { searchNearbyLibraries, searchLibrariesByText, formatDistance, calculateDistance, getNavigationUrl, getPlaceMapUrl, geocodeAddress, reverseGeocode, parseAddressDetails, getPlaceDetails } from '../services/googleMapsService';
+import { runCityMarketResearch, extractLocality } from '../firebase/services/marketResearchService';
 import { getFollowUpTimingInfo, sortDueFollowUps, formatTime12h } from '../services/followUpTimingHelper';
 import { useAuth } from '../context/AuthContext';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -304,6 +305,7 @@ export const FieldMarketing = () => {
   const [customLimitMode, setCustomLimitMode] = useState(false);
   const [manualSearchQuery, setManualSearchQuery] = useState('');
   const [nearbyVisitFilter, setNearbyVisitFilter] = useState('all'); // 'all' | 'unvisited' | 'visited'
+  const [selectedNearbyArea, setSelectedNearbyArea] = useState('All');
   const [showDiscovery, setShowDiscovery] = useState(true);
 
   const isSuperAdmin = user?.role === 'super_admin';
@@ -447,23 +449,6 @@ export const FieldMarketing = () => {
   const performSearch = useCallback(async (loc, category = activeCategory, customQuery = '', radius = searchRadius, limit = searchLimit) => {
     let targetLoc = loc || myLocation;
 
-    // If live GPS coordinates are not yet available, try to fetch current device GPS directly
-    if (!targetLoc) {
-      try {
-        toast.loading('Acquiring your live GPS location...', { id: 'gps-lock' });
-        targetLoc = await getCurrentGPSLocation();
-        setMyLocation(targetLoc);
-        const rev = await reverseGeocode(targetLoc.latitude, targetLoc.longitude);
-        const locName = rev.cityName || rev.formattedAddress || 'Your Live Location';
-        setCurrentLocationName(locName);
-        toast.dismiss('gps-lock');
-      } catch (gpsErr) {
-        toast.dismiss('gps-lock');
-        toast.error('Device GPS is required to find nearest places. Please enable location permission in your browser.');
-        return;
-      }
-    }
-
     setSearchingNearby(true);
     try {
       let query = (customQuery != null ? customQuery : manualSearchQuery).trim();
@@ -472,17 +457,139 @@ export const FieldMarketing = () => {
         setSearchingNearby(false);
         return;
       }
-      const hasRadius = radius && Number(radius) > 0;
-      const hasLimit = limit && Number(limit) > 0;
-      if (!hasRadius && !hasLimit) {
-        toast.error('Please specify either KM Radius or Number of Places.');
-        setSearchingNearby(false);
+
+      // Check if query is targeting a city, corridor or full metropolitan coverage
+      const cityCorridorRegex = /(indore|pithampur|pitampur|mr\s*10|aurobindo|aurbindo|lavkush|lovekush|super\s*corridor|bhawar\s*kuan|bhanwarkuan|vijay\s*nagar|sudama\s*nagar|rau|silicon\s*city|palasia|geeta\s*bhawan|rajwada|sukliya|sukhliya|khajrana|bengali|mhow|kota|gwalior|bhopal|ujjain|jabalpur|jaipur|delhi|mumbai|pune|ahmedabad|surat|lucknow|kanpur|agra|patna|chandigarh|vadodara|dehradun|meerut|varanasi|prayagraj|dewas|ratlam|sagar|rewa|satna)/i;
+      const isCityOrCorridor = cityCorridorRegex.test(query);
+      const isFullCoverage = (radius == null || radius === '') && (limit == null || limit === '');
+
+      // If search text mentions a city/corridor, or user requests Full Coverage / Any Distance
+      if (isCityOrCorridor || (isFullCoverage && !targetLoc)) {
+        let targetCity = 'Indore';
+        const match = query.match(cityCorridorRegex);
+        if (match) {
+          const matchedText = match[0].toLowerCase();
+          if (/pithampur|pitampur|mr\s*10|aurobindo|aurbindo|lavkush|lovekush|super\s*corridor|bhawar|vijay|sudama|rau|silicon|palasia|geeta|rajwada|sukliya|sukhliya|khajrana|bengali|mhow/.test(matchedText)) {
+            targetCity = 'Indore';
+          } else {
+            targetCity = match[0];
+          }
+        } else if (currentLocationName && currentLocationName !== 'Your Live Location') {
+          targetCity = currentLocationName.replace(/\s*\(Default Location\)/gi, '').split(',')[0].trim();
+        }
+
+        toast.loading(`Running 100% full scan for ${targetCity}...`, { id: 'city-scan' });
+
+        const report = await runCityMarketResearch({
+          city: targetCity,
+          category,
+          scanDepth: 'exhaustive',
+          existingVisits: visits,
+          customQuery: query,
+        });
+
+        toast.dismiss('city-scan');
+
+        const rawPlaces = report.places || [];
+        const placesWithDistance = rawPlaces.map((p) => {
+          let distMeters = p.distanceMeters;
+          let distFormatted = '';
+          let durationFormatted = '';
+
+          // Calculate distance from user GPS if user GPS is available and within reasonable metro radius (< 80km)
+          if (myLocation?.latitude && myLocation?.longitude) {
+            const dFromUser = calculateDistance(myLocation.latitude, myLocation.longitude, p.lat, p.lng);
+            if (dFromUser <= 80000) {
+              distMeters = dFromUser;
+              distFormatted = formatDistance(dFromUser);
+            }
+          }
+
+          if (!distFormatted) {
+            if (p.distanceKm != null) {
+              distFormatted = `${p.distanceKm} km from center`;
+            } else if (distMeters != null) {
+              distFormatted = formatDistance(distMeters);
+            } else {
+              distFormatted = 'In City';
+            }
+          }
+
+          return {
+            ...p,
+            distance: distMeters,
+            distanceFormatted: distFormatted,
+            durationFormatted,
+            isOpen: null,
+          };
+        });
+
+        // Apply limit if specified (e.g. 50 places)
+        const finalResults = (limit && Number(limit) > 0) ? placesWithDistance.slice(0, Number(limit)) : placesWithDistance;
+
+        setNearbyLibraries(finalResults);
+        setSelectedNearbyArea('All');
+        setNearbySearchDone(true);
+
+        // Audit Log: Record Google API Call for Field Reports
+        try {
+          const pagesCount = Math.ceil(finalResults.length / 20) || 1;
+          const estimatedGrossInr = (pagesCount * 1.5 + 0.4).toFixed(2);
+          const radiusInKm = radius ? (Number(radius) >= 1000 ? Math.round(Number(radius) / 1000) : Number(radius)) : null;
+          await logSearchAudit({
+            staffId: user?.uid || user?.id || 'admin',
+            staffName: user?.displayName || user?.name || (isSuperAdmin ? 'Admin' : 'Staff Member'),
+            staffEmail: user?.email || '',
+            staffRole: user?.role || (isSuperAdmin ? 'Admin' : 'Staff'),
+            query,
+            category: category === 'gym' ? 'Gym' : 'Library',
+            radiusKm: radiusInKm,
+            limitCount: limit ? Number(limit) : null,
+            resultsCount: finalResults.length,
+            pagesCount,
+            estimatedGrossInr: Number(estimatedGrossInr),
+            location: {
+              latitude: targetLoc?.latitude || 22.7196,
+              longitude: targetLoc?.longitude || 75.8577,
+              accuracy: targetLoc?.accuracy || null,
+              locationName: targetCity,
+            },
+            createdAt: new Date().toISOString(),
+          });
+        } catch (logErr) {
+          console.warn('Failed to record search audit log:', logErr);
+        }
+
         return;
       }
+
+      // If live GPS coordinates are not yet available, try to fetch current device GPS directly
+      if (!targetLoc) {
+        try {
+          toast.loading('Acquiring your live GPS location...', { id: 'gps-lock' });
+          targetLoc = await getCurrentGPSLocation();
+          setMyLocation(targetLoc);
+          const rev = await reverseGeocode(targetLoc.latitude, targetLoc.longitude);
+          const locName = rev.cityName || rev.formattedAddress || 'Your Live Location';
+          setCurrentLocationName(locName);
+          toast.dismiss('gps-lock');
+        } catch (gpsErr) {
+          toast.dismiss('gps-lock');
+          toast.error('Device GPS is required to find nearest places. Please enable location permission in your browser.');
+          return;
+        }
+      }
+
+      const hasRadius = radius && Number(radius) > 0;
+      const hasLimit = limit && Number(limit) > 0;
       const targetLimit = hasLimit ? Number(limit) : 1000;
       const res = await searchLibrariesByText(query, targetLoc.latitude, targetLoc.longitude, hasRadius ? Number(radius) : null, targetLimit);
-      const resultsList = res || [];
+      const resultsList = (res || []).map((p) => ({
+        ...p,
+        locality: p.locality || extractLocality(p.address, query || currentLocationName),
+      }));
       setNearbyLibraries(resultsList);
+      setSelectedNearbyArea('All');
       setNearbySearchDone(true);
 
       // ── Audit Log: Record Google API Call for Field Reports ──────────────
@@ -519,7 +626,7 @@ export const FieldMarketing = () => {
     } finally {
       setSearchingNearby(false);
     }
-  }, [activeCategory, myLocation, manualSearchQuery, searchRadius, searchLimit, currentLocationName, user, isSuperAdmin]);
+  }, [activeCategory, myLocation, manualSearchQuery, searchRadius, searchLimit, currentLocationName, user, isSuperAdmin, visits]);
 
   // ── Auto Detect Live Location on Mount (Location detection only, NO auto-search) ──────
   const loadDeviceGPS = useCallback(async (isManual = false) => {
@@ -564,11 +671,6 @@ export const FieldMarketing = () => {
 
     const hasRadius = searchRadius !== '' && Number(searchRadius) > 0;
     const hasLimit = searchLimit !== '' && Number(searchLimit) > 0;
-
-    if (!hasRadius && !hasLimit) {
-      toast.error('Please select either KM Radius or Number of Places!', { icon: '📍' });
-      return;
-    }
 
     const radiusVal = hasRadius ? Number(searchRadius) : null;
     const limitVal = hasLimit ? Number(searchLimit) : null;
@@ -1200,26 +1302,47 @@ export const FieldMarketing = () => {
     [visits]
   );
 
+  // Area / Locality Breakdown for discovery places (Konsa area ma kitni library ha)
+  const nearbyAreaBreakdown = useMemo(() => {
+    if (!nearbyLibraries || nearbyLibraries.length === 0) return [];
+    const counts = {};
+    nearbyLibraries.forEach((p) => {
+      const loc = p.locality || extractLocality(p.address, manualSearchQuery || currentLocationName);
+      counts[loc] = (counts[loc] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .map(([area, count]) => ({ area, count }))
+      .sort((a, b) => b.count - a.count);
+  }, [nearbyLibraries, manualSearchQuery, currentLocationName]);
+
   // Computed Visited vs Unvisited for discovery places
   const nearbyCounts = useMemo(() => {
     let visited = 0;
     let unvisited = 0;
-    nearbyLibraries.forEach((place) => {
+    const targetList = selectedNearbyArea === 'All'
+      ? nearbyLibraries
+      : nearbyLibraries.filter((p) => (p.locality || extractLocality(p.address, manualSearchQuery || currentLocationName)) === selectedNearbyArea);
+
+    targetList.forEach((place) => {
       const history = getPlaceVisitHistory(place.placeId, place.name);
       if (history.length > 0) visited++;
       else unvisited++;
     });
-    return { all: nearbyLibraries.length, unvisited, visited };
-  }, [nearbyLibraries, getPlaceVisitHistory]);
+    return { all: targetList.length, unvisited, visited };
+  }, [nearbyLibraries, selectedNearbyArea, getPlaceVisitHistory, manualSearchQuery, currentLocationName]);
 
   const filteredNearbyLibraries = useMemo(() => {
     return nearbyLibraries.filter((place) => {
+      if (selectedNearbyArea !== 'All') {
+        const loc = place.locality || extractLocality(place.address, manualSearchQuery || currentLocationName);
+        if (loc !== selectedNearbyArea) return false;
+      }
       const isVisited = getPlaceVisitHistory(place.placeId, place.name).length > 0;
       if (nearbyVisitFilter === 'unvisited') return !isVisited;
       if (nearbyVisitFilter === 'visited') return isVisited;
       return true;
     });
-  }, [nearbyLibraries, nearbyVisitFilter, getPlaceVisitHistory]);
+  }, [nearbyLibraries, selectedNearbyArea, nearbyVisitFilter, getPlaceVisitHistory, manualSearchQuery, currentLocationName]);
 
   // Visit count per place or business name (Visit #1, Visit #2, etc.)
   const getVisitNumber = useCallback(
@@ -1993,6 +2116,45 @@ export const FieldMarketing = () => {
             </div>
           </div>
 
+          {/* Quick Metros & Corridors Shortcuts for 100% Full Discovery */}
+          <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+            <span className="text-[11px] font-bold text-slate-500 mr-1 flex items-center gap-1">
+              <Sparkles size={12} className="text-amber-500" />
+              100% Full City / Corridor Shortcuts:
+            </span>
+            {[
+              { label: '📍 Indore (Full Coverage)', query: 'Indore' },
+              { label: 'MR 10 Corridor', query: 'MR 10 Indore' },
+              { label: 'Aurobindo / Bhawrasla', query: 'Aurobindo Indore' },
+              { label: 'Lavkush / Super Corridor', query: 'Lavkush Indore' },
+              { label: 'Pithampur Industrial Hub', query: 'Pithampur' },
+              { label: 'Bhawar Kuan Education Hub', query: 'Bhawar Kuan Indore' },
+              { label: 'Vijay Nagar & Scheme 54', query: 'Vijay Nagar Indore' },
+              { label: 'Rau & Silicon City', query: 'Rau Indore' },
+              { label: 'Kota', query: 'Kota' },
+              { label: 'Gwalior', query: 'Gwalior' },
+              { label: 'Bhopal', query: 'Bhopal' },
+            ].map((shortcut) => (
+              <button
+                key={shortcut.label}
+                type="button"
+                onClick={() => {
+                  setManualSearchQuery(shortcut.query);
+                  setSearchRadius('');
+                  setSearchLimit('');
+                  performSearch(myLocation, activeCategory, shortcut.query, null, null);
+                }}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer border ${
+                  manualSearchQuery.toLowerCase().includes(shortcut.query.toLowerCase())
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-2xs font-bold'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200'
+                }`}
+              >
+                {shortcut.label}
+              </button>
+            ))}
+          </div>
+
             {/* Results Grid */}
             {nearbySearchDone && (
               <div>
@@ -2064,6 +2226,66 @@ export const FieldMarketing = () => {
                   </div>
                 </div>
 
+                {/* Area & Locality Breakdown (Konsa area ma kitni library ha) */}
+                {nearbyAreaBreakdown.length > 0 && (
+                  <div className="mb-4 p-3.5 rounded-2xl bg-gradient-to-r from-blue-50/80 to-indigo-50/80 border border-blue-100 shadow-2xs space-y-2.5">
+                    <div className="flex items-center justify-between flex-wrap gap-2">
+                      <span className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                        <MapPin size={14} className="text-blue-600" />
+                        📍 Konsa Area Mein Kitni {activeCategory === 'gym' ? 'Gyms' : 'Libraries'} Hain ({nearbyAreaBreakdown.length} Areas):
+                      </span>
+                      {selectedNearbyArea !== 'All' && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedNearbyArea('All')}
+                          className="text-[11px] font-bold text-blue-600 hover:text-blue-800 bg-white px-2 py-0.5 rounded-md border border-blue-200 cursor-pointer shadow-2xs"
+                        >
+                          ✕ Clear Area Filter (Show All)
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 max-h-36 overflow-y-auto pr-1">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedNearbyArea('All')}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
+                          selectedNearbyArea === 'All'
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span>All Areas</span>
+                        <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${
+                          selectedNearbyArea === 'All' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-800'
+                        }`}>
+                          {nearbyLibraries.length}
+                        </span>
+                      </button>
+
+                      {nearbyAreaBreakdown.map((ab) => (
+                        <button
+                          key={ab.area}
+                          type="button"
+                          onClick={() => setSelectedNearbyArea(selectedNearbyArea === ab.area ? 'All' : ab.area)}
+                          className={`px-3 py-1.5 rounded-xl text-xs transition flex items-center gap-1.5 cursor-pointer ${
+                            selectedNearbyArea === ab.area
+                              ? 'bg-blue-600 text-white shadow-xs font-bold'
+                              : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 font-semibold'
+                          }`}
+                        >
+                          <span>{ab.area}</span>
+                          <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${
+                            selectedNearbyArea === ab.area ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-800'
+                          }`}>
+                            {ab.count}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {filteredNearbyLibraries.length > 0 ? (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[480px] overflow-y-auto pr-1">
                     {filteredNearbyLibraries.map((place) => {
@@ -2080,6 +2302,18 @@ export const FieldMarketing = () => {
                             <div className="min-w-0">
                               <p className="font-bold text-slate-900 text-sm truncate">{place.name}</p>
                               <p className="text-[11px] text-slate-500 truncate mt-0.5">{place.address}</p>
+                              <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 font-bold text-[10px] border border-blue-100/80">
+                                  <MapPin size={10} className="text-blue-500" />
+                                  {place.locality || extractLocality(place.address, manualSearchQuery || currentLocationName)}
+                                </span>
+                                {place.phone && (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600 font-semibold text-[10px]">
+                                    <Phone size={9} />
+                                    {place.phone}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                             <span className="text-xs font-extrabold text-blue-600 bg-blue-50 px-2 py-1 rounded-lg whitespace-nowrap border border-blue-100 flex items-center gap-1">
                               <span>{place.distanceFormatted}</span>
