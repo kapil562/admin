@@ -463,8 +463,8 @@ export const FieldMarketing = () => {
       const isCityOrCorridor = cityCorridorRegex.test(query);
       const isFullCoverage = (radius == null || radius === '') && (limit == null || limit === '');
 
-      // If search text mentions a city/corridor, or user requests Full Coverage / Any Distance
-      if (isCityOrCorridor || (isFullCoverage && !targetLoc)) {
+      // ONLY run heavy 11-zone exhaustive scan when user explicitly chooses Full Coverage (both radius and limit empty)
+      if (isFullCoverage && isCityOrCorridor) {
         let targetCity = 'Indore';
         const match = query.match(cityCorridorRegex);
         if (match) {
@@ -524,16 +524,13 @@ export const FieldMarketing = () => {
           };
         });
 
-        // Apply limit if specified (e.g. 50 places)
-        const finalResults = (limit && Number(limit) > 0) ? placesWithDistance.slice(0, Number(limit)) : placesWithDistance;
-
-        setNearbyLibraries(finalResults);
+        setNearbyLibraries(placesWithDistance);
         setSelectedNearbyArea('All');
         setNearbySearchDone(true);
 
         // Audit Log: Record Google API Call for Field Reports
         try {
-          const pagesCount = Math.ceil(finalResults.length / 20) || 1;
+          const pagesCount = Math.ceil(placesWithDistance.length / 20) || 1;
           const estimatedGrossInr = (pagesCount * 1.5 + 0.4).toFixed(2);
           const radiusInKm = radius ? (Number(radius) >= 1000 ? Math.round(Number(radius) / 1000) : Number(radius)) : null;
           await logSearchAudit({
@@ -545,7 +542,7 @@ export const FieldMarketing = () => {
             category: category === 'gym' ? 'Gym' : 'Library',
             radiusKm: radiusInKm,
             limitCount: limit ? Number(limit) : null,
-            resultsCount: finalResults.length,
+            resultsCount: placesWithDistance.length,
             pagesCount,
             estimatedGrossInr: Number(estimatedGrossInr),
             location: {
@@ -563,31 +560,90 @@ export const FieldMarketing = () => {
         return;
       }
 
-      // If live GPS coordinates are not yet available, try to fetch current device GPS directly
-      if (!targetLoc) {
-        try {
-          toast.loading('Acquiring your live GPS location...', { id: 'gps-lock' });
-          targetLoc = await getCurrentGPSLocation();
-          setMyLocation(targetLoc);
-          const rev = await reverseGeocode(targetLoc.latitude, targetLoc.longitude);
-          const locName = rev.cityName || rev.formattedAddress || 'Your Live Location';
-          setCurrentLocationName(locName);
-          toast.dismiss('gps-lock');
-        } catch (gpsErr) {
-          toast.dismiss('gps-lock');
-          toast.error('Device GPS is required to find nearest places. Please enable location permission in your browser.');
-          return;
+      // Cost-effective Targeted Search: ONLY search what the user requested to minimize API calls
+      let searchLat = targetLoc?.latitude;
+      let searchLng = targetLoc?.longitude;
+
+      if (isCityOrCorridor) {
+        const KNOWN_COORDS = {
+          indore: { lat: 22.7196, lng: 75.8577 },
+          pithampur: { lat: 22.6139, lng: 75.6822 },
+          bhopal: { lat: 23.2599, lng: 77.4126 },
+          gwalior: { lat: 26.2183, lng: 78.1828 },
+          jabalpur: { lat: 23.1815, lng: 79.9864 },
+          ujjain: { lat: 23.1765, lng: 75.7885 },
+          kota: { lat: 25.2138, lng: 75.8648 },
+          jaipur: { lat: 26.9124, lng: 75.7873 },
+          delhi: { lat: 28.6139, lng: 77.2090 },
+          mumbai: { lat: 19.0760, lng: 72.8777 },
+          pune: { lat: 18.5204, lng: 73.8567 },
+        };
+        const match = query.match(cityCorridorRegex);
+        const cityKey = (match ? match[0] : query).toLowerCase().trim();
+        if (KNOWN_COORDS[cityKey]) {
+          searchLat = KNOWN_COORDS[cityKey].lat;
+          searchLng = KNOWN_COORDS[cityKey].lng;
+        } else {
+          try {
+            const geo = await geocodeAddress(query);
+            if (geo?.latitude) {
+              searchLat = geo.latitude;
+              searchLng = geo.longitude;
+            }
+          } catch (e) {
+            // fallback
+          }
+        }
+      }
+
+      // If live GPS coordinates are not yet available and no city coordinates were resolved
+      if (!searchLat || !searchLng) {
+        if (!targetLoc) {
+          try {
+            toast.loading('Acquiring your live GPS location...', { id: 'gps-lock' });
+            targetLoc = await getCurrentGPSLocation();
+            setMyLocation(targetLoc);
+            const rev = await reverseGeocode(targetLoc.latitude, targetLoc.longitude);
+            const locName = rev.cityName || rev.formattedAddress || 'Your Live Location';
+            setCurrentLocationName(locName);
+            toast.dismiss('gps-lock');
+            searchLat = targetLoc.latitude;
+            searchLng = targetLoc.longitude;
+          } catch (gpsErr) {
+            toast.dismiss('gps-lock');
+            toast.error('Location is required. Please type a city name or enable GPS.');
+            return;
+          }
+        } else {
+          searchLat = targetLoc.latitude;
+          searchLng = targetLoc.longitude;
         }
       }
 
       const hasRadius = radius && Number(radius) > 0;
       const hasLimit = limit && Number(limit) > 0;
-      const targetLimit = hasLimit ? Number(limit) : 1000;
-      const res = await searchLibrariesByText(query, targetLoc.latitude, targetLoc.longitude, hasRadius ? Number(radius) : null, targetLimit);
-      const resultsList = (res || []).map((p) => ({
-        ...p,
-        locality: p.locality || extractLocality(p.address, query || currentLocationName),
-      }));
+      const targetLimit = hasLimit ? Number(limit) : 20; // Default to 20 places if not specified (strictly 1 API call)
+
+      // Single targeted query - consumes only 1 API call (or 2-3 if targetLimit > 20)
+      const res = await searchLibrariesByText(query, searchLat, searchLng, hasRadius ? Number(radius) : null, targetLimit);
+      const resultsList = (res || []).map((p) => {
+        let distMeters = p.distance;
+        let distFormatted = p.distanceFormatted;
+        if (myLocation?.latitude && myLocation?.longitude) {
+          const dFromUser = calculateDistance(myLocation.latitude, myLocation.longitude, p.lat, p.lng);
+          if (dFromUser <= 80000) {
+            distMeters = dFromUser;
+            distFormatted = formatDistance(dFromUser);
+          }
+        }
+        return {
+          ...p,
+          distance: distMeters,
+          distanceFormatted: distFormatted || p.distanceFormatted,
+          locality: p.locality || extractLocality(p.address, query || currentLocationName),
+        };
+      });
+
       setNearbyLibraries(resultsList);
       setSelectedNearbyArea('All');
       setNearbySearchDone(true);
@@ -2114,45 +2170,6 @@ export const FieldMarketing = () => {
                 <span>{searchingNearby ? 'Searching...' : 'Find Nearest'}</span>
               </button>
             </div>
-          </div>
-
-          {/* Quick Metros & Corridors Shortcuts for 100% Full Discovery */}
-          <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-            <span className="text-[11px] font-bold text-slate-500 mr-1 flex items-center gap-1">
-              <Sparkles size={12} className="text-amber-500" />
-              100% Full City / Corridor Shortcuts:
-            </span>
-            {[
-              { label: '📍 Indore (Full Coverage)', query: 'Indore' },
-              { label: 'MR 10 Corridor', query: 'MR 10 Indore' },
-              { label: 'Aurobindo / Bhawrasla', query: 'Aurobindo Indore' },
-              { label: 'Lavkush / Super Corridor', query: 'Lavkush Indore' },
-              { label: 'Pithampur Industrial Hub', query: 'Pithampur' },
-              { label: 'Bhawar Kuan Education Hub', query: 'Bhawar Kuan Indore' },
-              { label: 'Vijay Nagar & Scheme 54', query: 'Vijay Nagar Indore' },
-              { label: 'Rau & Silicon City', query: 'Rau Indore' },
-              { label: 'Kota', query: 'Kota' },
-              { label: 'Gwalior', query: 'Gwalior' },
-              { label: 'Bhopal', query: 'Bhopal' },
-            ].map((shortcut) => (
-              <button
-                key={shortcut.label}
-                type="button"
-                onClick={() => {
-                  setManualSearchQuery(shortcut.query);
-                  setSearchRadius('');
-                  setSearchLimit('');
-                  performSearch(myLocation, activeCategory, shortcut.query, null, null);
-                }}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer border ${
-                  manualSearchQuery.toLowerCase().includes(shortcut.query.toLowerCase())
-                    ? 'bg-blue-600 text-white border-blue-600 shadow-2xs font-bold'
-                    : 'bg-white text-slate-700 border-slate-200 hover:bg-blue-50 hover:text-blue-700 hover:border-blue-200'
-                }`}
-              >
-                {shortcut.label}
-              </button>
-            ))}
           </div>
 
             {/* Results Grid */}
