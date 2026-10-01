@@ -208,7 +208,7 @@ const initialFormState = {
 };
 
 const RADIUS_OPTIONS = [
-  { value: '', label: '-- Any Distance (Nearest First) --' },
+  { value: '', label: '-- Select KM Radius --' },
   { value: 1000, label: '1 km Radius' },
   { value: 2000, label: '2 km Radius' },
   { value: 3000, label: '3 km Radius' },
@@ -219,10 +219,11 @@ const RADIUS_OPTIONS = [
   { value: 8000, label: '8 km Radius' },
   { value: 9000, label: '9 km Radius' },
   { value: 10000, label: '10 km Radius' },
+  { value: 'all', label: 'All Distance (Any km)' },
 ];
 
 const LIMIT_OPTIONS = [
-  { value: '', label: '-- All Available (Full Coverage) --' },
+  { value: '', label: '-- Select Places Count --' },
   { value: 1, label: '1 Place' },
   { value: 2, label: '2 Places' },
   { value: 3, label: '3 Places' },
@@ -233,6 +234,7 @@ const LIMIT_OPTIONS = [
   { value: 8, label: '8 Places' },
   { value: 9, label: '9 Places' },
   { value: 10, label: '10 Places' },
+  { value: 'all', label: 'All Places (Full Coverage)' },
 ];
 
 const DATE_FILTERS = [
@@ -724,11 +726,18 @@ export const FieldMarketing = () => {
       return;
     }
 
-    const hasRadius = searchRadius !== '' && Number(searchRadius) > 0;
-    const hasLimit = searchLimit !== '' && Number(searchLimit) > 0;
+    const hasRadius = searchRadius !== '' && searchRadius !== 'all' && Number(searchRadius) > 0;
+    const hasLimit = searchLimit !== '' && searchLimit !== 'all' && Number(searchLimit) > 0;
+    const isAllRadius = searchRadius === 'all';
+    const isAllLimit = searchLimit === 'all';
 
-    const radiusVal = hasRadius ? Number(searchRadius) : null;
-    const limitVal = hasLimit ? Number(searchLimit) : null;
+    if (!hasRadius && !hasLimit && !isAllRadius && !isAllLimit) {
+      toast.error('Please select either KM Radius or Number of Places!', { icon: '📍' });
+      return;
+    }
+
+    const radiusVal = isAllRadius ? null : (hasRadius ? Number(searchRadius) : null);
+    const limitVal = isAllLimit ? null : (hasLimit ? Number(searchLimit) : null);
     performSearch(myLocation, activeCategory, query, radiusVal, limitVal);
   };
 
@@ -2071,19 +2080,19 @@ export const FieldMarketing = () => {
                     if (e.target.value === 'custom') {
                       setCustomRadiusMode(true);
                     } else {
-                      const r = e.target.value === '' ? '' : Number(e.target.value);
+                      const r = e.target.value === '' ? '' : (e.target.value === 'all' ? 'all' : Number(e.target.value));
                       setSearchRadius(r);
                       if (nearbySearchDone && manualSearchQuery.trim()) {
-                        const hasR = r !== '' && Number(r) > 0;
-                        const hasL = searchLimit !== '' && Number(searchLimit) > 0;
-                        if (hasR || hasL) {
-                          performSearch(myLocation, activeCategory, manualSearchQuery, hasR ? Number(r) : null, hasL ? Number(searchLimit) : null);
+                        const hasR = r !== '' && r !== 'all' && Number(r) > 0;
+                        const hasL = searchLimit !== '' && searchLimit !== 'all' && Number(searchLimit) > 0;
+                        if (hasR || hasL || r === 'all' || searchLimit === 'all') {
+                          performSearch(myLocation, activeCategory, manualSearchQuery, r === 'all' ? null : (hasR ? Number(r) : null), searchLimit === 'all' ? null : (hasL ? Number(searchLimit) : null));
                         }
                       }
                     }
                   }}
                   className="flex-1 sm:flex-none px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
-                  title="Search Radius (5 km to 1000 km)"
+                  title="Search Radius (1 km to 10 km)"
                 >
                   {RADIUS_OPTIONS.map((r) => (
                     <option key={r.value} value={r.value}>
@@ -2094,7 +2103,7 @@ export const FieldMarketing = () => {
                 </select>
               )}
 
-              {/* No. of Results Limit Control: Dropdown with 5-100 places OR Type Custom count */}
+              {/* No. of Results Limit Control: Dropdown with 1-10 places OR Type Custom count */}
               {customLimitMode ? (
                 <div className="flex items-center bg-slate-50 border border-blue-500 rounded-xl px-2.5 py-1.5 shadow-xs">
                   <input
@@ -2133,19 +2142,19 @@ export const FieldMarketing = () => {
                     if (e.target.value === 'custom') {
                       setCustomLimitMode(true);
                     } else {
-                      const l = e.target.value === '' ? '' : Number(e.target.value);
+                      const l = e.target.value === '' ? '' : (e.target.value === 'all' ? 'all' : Number(e.target.value));
                       setSearchLimit(l);
                       if (nearbySearchDone && manualSearchQuery.trim()) {
-                        const hasR = searchRadius !== '' && Number(searchRadius) > 0;
-                        const hasL = l !== '' && Number(l) > 0;
-                        if (hasR || hasL) {
-                          performSearch(myLocation, activeCategory, manualSearchQuery, hasR ? Number(searchRadius) : null, hasL ? Number(l) : null);
+                        const hasR = searchRadius !== '' && searchRadius !== 'all' && Number(searchRadius) > 0;
+                        const hasL = l !== '' && l !== 'all' && Number(l) > 0;
+                        if (hasR || hasL || searchRadius === 'all' || l === 'all') {
+                          performSearch(myLocation, activeCategory, manualSearchQuery, searchRadius === 'all' ? null : (hasR ? Number(searchRadius) : null), l === 'all' ? null : (hasL ? Number(l) : null));
                         }
                       }
                     }
                   }}
                   className="flex-1 sm:flex-none px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 outline-none cursor-pointer"
-                  title="Maximum number of results (5 to 100)"
+                  title="Maximum number of results (1 to 10 places)"
                 >
                   {LIMIT_OPTIONS.map((opt) => (
                     <option key={opt.value} value={opt.value}>
