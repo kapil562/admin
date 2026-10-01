@@ -333,6 +333,8 @@ export const buildStaffDailyTimeline = (staffId, staffName, dateStr, visits = []
       checkInTime: visit.checkInTime || startTime,
       checkOutTime: visit.checkOutTime || endTime,
       location: visit.location || null,
+      placeLat: visit.placeLat || null,
+      placeLng: visit.placeLng || null,
       entryReceived,
       syncStatus,
       distanceFromMorningKm: auth.distanceFromMorning != null ? auth.distanceFromMorning : (visit.distanceFromMorningKm != null ? visit.distanceFromMorningKm : null),
@@ -354,31 +356,71 @@ export const buildStaffDailyTimeline = (staffId, staffName, dateStr, visits = []
   const timelineItems = [];
 
   allChronologicalEvents.forEach((item, idx) => {
-    const hasGps = Boolean(item.location && item.location.latitude && item.location.longitude);
+    let hasGps = Boolean(item.location && item.location.latitude && item.location.longitude);
+    let curLat = hasGps ? Number(item.location.latitude) : null;
+    let curLng = hasGps ? Number(item.location.longitude) : null;
+    const placeLat = item.placeLat || item.visit?.placeLat ? Number(item.placeLat || item.visit?.placeLat) : null;
+    const placeLng = item.placeLng || item.visit?.placeLng ? Number(item.placeLng || item.visit?.placeLng) : null;
 
     let legDistanceKm = 0;
-    if (hasGps) {
-      const curLat = Number(item.location.latitude);
-      const curLng = Number(item.location.longitude);
+    let isGpsAnomaly = false;
 
-      if (lastGpsPoint) {
-        const straightMeters = calculateDistance(lastGpsPoint.lat, lastGpsPoint.lng, curLat, curLng);
-        // Real-world road winding multiplier (standard factor ~1.25x for city travel)
-        legDistanceKm = Number(((straightMeters * 1.25) / 1000).toFixed(1));
-        // Filter out GPS jitter in the exact same room (< 100m)
-        if (straightMeters < 100) legDistanceKm = 0;
+    if (hasGps && lastGpsPoint) {
+      const straightMeters = calculateDistance(lastGpsPoint.lat, lastGpsPoint.lng, curLat, curLng);
+
+      // Check for impossible GPS teleportation (> 40km jump between local marketing stops)
+      if (straightMeters > 40000) {
+        isGpsAnomaly = true;
+        // If the visit has a verified Google Place location near the last stop, use the real library position!
+        if (placeLat && placeLng) {
+          const placeMeters = calculateDistance(lastGpsPoint.lat, lastGpsPoint.lng, placeLat, placeLng);
+          if (placeMeters < 30000) {
+            curLat = placeLat;
+            curLng = placeLng;
+            legDistanceKm = placeMeters < 100 ? 0 : Number(((placeMeters * 1.25) / 1000).toFixed(1));
+            totalDistanceKm += legDistanceKm;
+            lastGpsPoint = { lat: curLat, lng: curLng };
+            validGpsCoordinates.push(`${curLat},${curLng}`);
+          }
+        }
+      } else {
+        legDistanceKm = straightMeters < 100 ? 0 : Number(((straightMeters * 1.25) / 1000).toFixed(1));
         totalDistanceKm += legDistanceKm;
+        lastGpsPoint = { lat: curLat, lng: curLng };
+        validGpsCoordinates.push(`${curLat},${curLng}`);
       }
-
+    } else if (hasGps) {
+      if (placeLat && placeLng) {
+        const diffFromPlace = calculateDistance(curLat, curLng, placeLat, placeLng);
+        if (diffFromPlace > 40000) {
+          curLat = placeLat;
+          curLng = placeLng;
+          isGpsAnomaly = true;
+        }
+      }
       lastGpsPoint = { lat: curLat, lng: curLng };
       validGpsCoordinates.push(`${curLat},${curLng}`);
+    } else if (placeLat && placeLng) {
+      if (lastGpsPoint) {
+        const placeMeters = calculateDistance(lastGpsPoint.lat, lastGpsPoint.lng, placeLat, placeLng);
+        if (placeMeters < 30000) {
+          legDistanceKm = placeMeters < 100 ? 0 : Number(((placeMeters * 1.25) / 1000).toFixed(1));
+          totalDistanceKm += legDistanceKm;
+          lastGpsPoint = { lat: placeLat, lng: placeLng };
+          validGpsCoordinates.push(`${placeLat},${placeLng}`);
+        }
+      } else {
+        lastGpsPoint = { lat: placeLat, lng: placeLng };
+        validGpsCoordinates.push(`${placeLat},${placeLng}`);
+      }
     }
 
     timelineItems.push({
       ...item,
       legDistanceKm,
       cumulativeDistanceKm: Number(totalDistanceKm.toFixed(1)),
-      hasGps,
+      hasGps: hasGps || Boolean(placeLat && placeLng),
+      isGpsAnomaly,
     });
   });
 
@@ -450,6 +492,7 @@ export const buildStaffDailyTimeline = (staffId, staffName, dateStr, visits = []
     liveStatus,
     isCurrentlyOnDuty,
     latestPunch,
+    hasActivity: totalVisits > 0 || punchEvents.length > 0,
   };
 };
 

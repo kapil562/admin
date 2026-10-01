@@ -304,8 +304,15 @@ export const StaffDashboard = () => {
         competitorName: prefill.competitorName || '',
         competitorExpiryDate: prefill.competitorExpiryDate || '',
         competitorDuration: prefill.competitorDuration || '',
-        status: prefill.status || 'Follow Up',
+        status: prefill.status === 'Follow Up' ? 'Interested' : (prefill.status || 'Interested'),
         discussionNotes: '', // Clean for fresh notes entry
+        demoGiven: prefill.demoGiven || false,
+        followUpDate: '', // Clean for new entry
+        followUpTime: '', // Clean for new entry
+        followUpType: 'In-Person Re-Visit',
+        nextActionItem: '', // Clean for new entry
+        reminderNote: '', // Clean for new entry
+        photoUrl: null,
         placeId: prefill.placeId || '',
         placeName: prefill.placeName || '',
         placeAddress: prefill.placeAddress || '',

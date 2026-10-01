@@ -275,7 +275,7 @@ export const StaffAttendance = () => {
       missingGpsCount: totalMissingGpsOnDate,
       missingPhotoCount: totalMissingPhotoOnDate,
       rapidVisitsCount: totalRapidOnDate,
-      activeStaffCount: staffTimelines.filter((t) => t.hasActivity).length,
+      activeStaffCount: staffTimelines.filter((t) => t.hasActivity || t.totalVisits > 0).length,
     };
   }, [allStaffAndAdmins, trackerDate, visits, logs, selectedStaffFilter, isSuperAdmin, myId, myName, user]);
 

@@ -743,14 +743,14 @@ export const FieldMarketing = () => {
       competitorExpiryDate: visit.competitorExpiryDate || '',
       competitorDuration: visit.competitorDuration || '',
       switchingReason: visit.switchingReason || '',
-      status: visit.status || 'Follow Up',
+      status: visit.status === 'Follow Up' ? 'Interested' : (visit.status || 'Interested'),
       discussionNotes: '', // Clean notes input for this new re-visit
       demoGiven: visit.demoGiven || false,
-      followUpDate: visit.followUpDate || '',
-      followUpTime: visit.followUpTime || '',
-      followUpType: visit.followUpType || 'In-Person Re-Visit',
-      nextActionItem: visit.nextActionItem || '',
-      reminderNote: '',
+      followUpDate: '', // Clean for new entry
+      followUpTime: '', // Clean for new entry
+      followUpType: 'In-Person Re-Visit',
+      nextActionItem: '', // Clean for new entry
+      reminderNote: '', // Clean for new entry
       photoUrl: null,
       placeId: visit.placeId || null,
       placeName: visit.placeName || visit.businessName || '',
