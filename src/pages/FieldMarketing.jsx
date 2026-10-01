@@ -209,31 +209,30 @@ const initialFormState = {
 
 const RADIUS_OPTIONS = [
   { value: '', label: '-- Any Distance (Nearest First) --' },
+  { value: 1000, label: '1 km Radius' },
+  { value: 2000, label: '2 km Radius' },
+  { value: 3000, label: '3 km Radius' },
+  { value: 4000, label: '4 km Radius' },
   { value: 5000, label: '5 km Radius' },
+  { value: 6000, label: '6 km Radius' },
+  { value: 7000, label: '7 km Radius' },
+  { value: 8000, label: '8 km Radius' },
+  { value: 9000, label: '9 km Radius' },
   { value: 10000, label: '10 km Radius' },
-  { value: 20000, label: '20 km Radius' },
-  { value: 30000, label: '30 km Radius' },
-  { value: 50000, label: '50 km Radius' },
-  { value: 100000, label: '100 km Radius' },
-  { value: 200000, label: '200 km Radius' },
-  { value: 300000, label: '300 km Radius' },
-  { value: 500000, label: '500 km Radius' },
-  { value: 1000000, label: '1000 km Radius' },
 ];
 
 const LIMIT_OPTIONS = [
   { value: '', label: '-- All Available (Full Coverage) --' },
+  { value: 1, label: '1 Place' },
+  { value: 2, label: '2 Places' },
+  { value: 3, label: '3 Places' },
+  { value: 4, label: '4 Places' },
+  { value: 5, label: '5 Places' },
+  { value: 6, label: '6 Places' },
+  { value: 7, label: '7 Places' },
+  { value: 8, label: '8 Places' },
+  { value: 9, label: '9 Places' },
   { value: 10, label: '10 Places' },
-  { value: 20, label: '20 Places' },
-  { value: 30, label: '30 Places' },
-  { value: 50, label: '50 Places' },
-  { value: 75, label: '75 Places' },
-  { value: 100, label: '100 Places' },
-  { value: 150, label: '150 Places' },
-  { value: 200, label: '200 Places' },
-  { value: 300, label: '300 Places' },
-  { value: 500, label: '500 Places' },
-  { value: 1000, label: '1000 Places' },
 ];
 
 const DATE_FILTERS = [
