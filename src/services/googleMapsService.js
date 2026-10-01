@@ -452,12 +452,39 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
     try {
       const targetCount = maxResults && Number(maxResults) > 0 ? Number(maxResults) : 1000;
 
-      // Exact direct query search as requested by user (no extra query additions)
+      // 101% Deepest Search: Build rich query list with synonyms so no places (Reading room, Study point, Pustakalaya, etc.) are skipped
       let queryList = [];
-      if (cleanQ) {
-        queryList = [cleanQ];
+      const cleanLower = cleanQ.toLowerCase();
+      const isCleanQGym = cleanLower.includes('gym') || cleanLower.includes('fitness') || cleanLower.includes('workout');
+      const isCleanQLib = cleanLower.includes('library') || cleanLower.includes('study') || cleanLower.includes('reading') || cleanLower.includes('pustak');
+
+      if (isCleanQGym || (!cleanQ && isGym)) {
+        const base = cleanQ || 'gym';
+        queryList = [
+          base,
+          'fitness center',
+          'workout gym fitness',
+          'bodybuilding health club',
+          'crossfit studio gym',
+        ];
+      } else if (isCleanQLib || (!cleanQ && !isGym)) {
+        const base = cleanQ || 'library';
+        queryList = [
+          base,
+          'study library',
+          'self study reading room',
+          'study point',
+          'pustakalaya study room',
+          'digital library',
+          'abhyasika reading hall',
+        ];
       } else {
-        queryList = isGym ? ['gym'] : ['library'];
+        queryList = [
+          cleanQ,
+          `${cleanQ} library`,
+          `${cleanQ} study point`,
+          `${cleanQ} reading room`,
+        ];
       }
 
       // Location configuration: handle circles <= 50km and bounding box rectangles > 50km (up to 1000km)
@@ -490,6 +517,8 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
       const allPlacesMap = new Map();
 
       for (const q of queryList) {
+        if (allPlacesMap.size >= targetCount) break;
+
         let pageToken = null;
         const initialBody = {
           textQuery: q,
@@ -549,6 +578,9 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
           if (allPlacesMap.size >= targetCount) break;
           if (!data.nextPageToken) break;
           pageToken = data.nextPageToken;
+
+          // Brief delay for nextPageToken propagation
+          await new Promise((resolve) => setTimeout(resolve, 300));
         }
 
         if (allPlacesMap.size >= targetCount) break;
@@ -557,9 +589,14 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
       if (allPlacesMap.size > 0) {
         let formatted = Array.from(allPlacesMap.values());
 
-        // Sort strictly by straight-line distance from user's current location
+        // Sort strictly by straight-line distance from user's current location (Nearest to Farthest)
         if (lat && lng) {
           formatted.sort((a, b) => (a.distance ?? 999999) - (b.distance ?? 999999));
+        }
+
+        // Strictly respect targetCount requested by the user (e.g. 100 places)
+        if (targetCount && targetCount < 1000) {
+          formatted = formatted.slice(0, targetCount);
         }
 
         // Road route enrichment for top candidate nearest places (up to 25 places)

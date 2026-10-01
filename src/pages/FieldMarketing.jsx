@@ -234,6 +234,9 @@ const LIMIT_OPTIONS = [
   { value: 8, label: '8 Places' },
   { value: 9, label: '9 Places' },
   { value: 10, label: '10 Places' },
+  { value: 20, label: '20 Places' },
+  { value: 50, label: '50 Places' },
+  { value: 100, label: '100 Places' },
   { value: 'all', label: 'All Places (Full Coverage)' },
 ];
 
