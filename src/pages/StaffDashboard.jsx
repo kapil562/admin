@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
 import { getFieldVisits, logFieldVisit, updateFieldVisit, getCurrentGPSLocation, getAttendanceLogs, updateVisitStatus, punchAttendance } from '../firebase/services/marketingService';
 import { calculateStaffPayroll, getStaffUsers } from '../firebase/services/staffService';
 import { getSoftwareVerticals } from '../firebase/services/verticalService';
 import { searchNearbyLibraries, formatDistance, getNavigationUrl } from '../services/googleMapsService';
+import { getFollowUpTimingInfo, sortDueFollowUps, formatTime12h, normalizeBusinessTime } from '../services/followUpTimingHelper';
 import { StatCard } from '../components/ui/StatCard';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
@@ -376,7 +377,7 @@ export const StaffDashboard = () => {
     const dateStr = targetDate.toISOString().split('T')[0];
     setForm((prev) => ({
       ...prev,
-      status: 'Follow Up',
+      status: prev.status === 'Deal Closed' || prev.status === 'Not Interested' ? 'Follow Up' : (prev.status || 'Interested'),
       followUpDate: dateStr,
       followUpTime: timeStr,
     }));
@@ -399,7 +400,7 @@ export const StaffDashboard = () => {
       competitorExpiryDate: expiryStr,
       followUpDate: reminderStr,
       followUpTime: '11:00',
-      status: 'Follow Up',
+      status: prev.status === 'Deal Closed' || prev.status === 'Not Interested' ? 'Follow Up' : (prev.status || 'Interested'),
       nextActionItem: `Competitor expiring - offer migration`,
       reminderNote: `Competitor plan expires on ${expiryStr}`,
     }));
@@ -596,9 +597,28 @@ export const StaffDashboard = () => {
   const totalActiveMinutes = myTodayLog?.totalActiveMinutes || 0;
   const totalBreakMinutes = myTodayLog?.totalBreakMinutes || 0;
 
-  const myFollowups = myVisits.filter((v) => v.status === 'Follow Up' && v.followUpDate);
-  const dueFollowups = myFollowups.filter((v) => v.followUpDate <= todayStr);
-  const overdueFollowups = dueFollowups.filter((v) => v.followUpDate < todayStr);
+  const [followUpTicker, setFollowUpTicker] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setFollowUpTicker((t) => t + 1), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const myFollowups = useMemo(() => {
+    return myVisits.filter(
+      (v) => Boolean(v.followUpDate) && v.status !== 'Deal Closed' && v.status !== 'Not Interested'
+    );
+  }, [myVisits]);
+
+  const dueFollowups = useMemo(() => {
+    const raw = myFollowups.filter((v) => v.followUpDate <= todayStr);
+    return sortDueFollowUps(raw);
+  }, [myFollowups, todayStr, followUpTicker]);
+
+  const overdueFollowups = useMemo(() => {
+    return dueFollowups.filter(
+      (v) => v.followUpDate < todayStr || getFollowUpTimingInfo(v.followUpDate, v.followUpTime).isOverdue
+    );
+  }, [dueFollowups, todayStr]);
 
   const formatCurrency = (amt) => {
     return new Intl.NumberFormat('en-IN', {
@@ -631,7 +651,7 @@ export const StaffDashboard = () => {
         // Only fire once per visit per session
         if (notifiedIds.current.has(f.id)) return;
 
-        const followHHMM = f.followUpTime.slice(0, 5); // normalise to HH:MM
+        const followHHMM = normalizeBusinessTime(f.followUpTime).slice(0, 5); // normalise to 24h HH:MM
         if (f.followUpDate === currentDate && followHHMM === currentHHMM) {
           notifiedIds.current.add(f.id);
 
@@ -642,9 +662,20 @@ export const StaffDashboard = () => {
                 <p className="font-black text-sm text-amber-900">
                   ⏰ Follow-up Due Now!
                 </p>
-                <p className="text-xs font-semibold text-slate-800">
-                  {f.businessName}
-                </p>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <p className="text-xs font-semibold text-slate-800">
+                    {f.businessName}
+                  </p>
+                  <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded-full border ${
+                    f.status === 'Interested'
+                      ? 'bg-blue-50 text-blue-700 border-blue-200'
+                      : f.status === 'Demo Given'
+                      ? 'bg-purple-50 text-purple-700 border-purple-200'
+                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                  }`}>
+                    {f.status || 'Follow Up'}
+                  </span>
+                </div>
                 <p className="text-[11px] text-slate-600">
                   {f.ownerName} · {f.phone}
                 </p>
@@ -967,56 +998,93 @@ export const StaffDashboard = () => {
           {/* Follow-up Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {dueFollowups.map((f) => {
-              const isOverdue = f.followUpDate < todayStr;
+              const timing = getFollowUpTimingInfo(f.followUpDate, f.followUpTime);
               return (
                 <div
                   key={f.id}
-                  className={`bg-white rounded-xl p-4 border shadow-xs flex flex-col justify-between ${isOverdue ? 'border-rose-200 ring-1 ring-rose-100' : 'border-amber-100'}`}
+                  className={`bg-white rounded-xl p-4 border shadow-xs flex flex-col justify-between transition hover:shadow-md ${timing.cardBorder}`}
                 >
-                  <div>
-                    {/* Name + date badge */}
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <div className="min-w-0">
-                        <h4 className="font-bold text-slate-800 text-sm truncate">{f.businessName}</h4>
-                        <p className="text-[11px] text-slate-500 mt-0.5">{f.ownerName}{f.personMet ? ` · ${f.personMet.split(' ')[0]}` : ''}</p>
-                      </div>
-                      <div className={`text-[10px] font-black px-2 py-1 rounded-lg shrink-0 text-center ${isOverdue ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-800'}`}>
-                        {isOverdue ? '🚨 OVERDUE' : '📅 TODAY'}
-                        <div className="text-[9px] font-semibold mt-0.5">
-                          {f.followUpDate}{f.followUpTime ? ` @ ${f.followUpTime}` : ''}
+                  <div className="space-y-2">
+                    {/* Name + date & timing badge */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <h4 className="font-bold text-slate-800 text-sm truncate" title={f.businessName}>
+                            {f.businessName}
+                          </h4>
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${
+                            f.status === 'Interested'
+                              ? 'bg-blue-50 text-blue-700 border-blue-200'
+                              : f.status === 'Demo Given'
+                              ? 'bg-purple-50 text-purple-700 border-purple-200'
+                              : 'bg-amber-50 text-amber-700 border-amber-200'
+                          }`}>
+                            {f.status || 'Follow Up'}
+                          </span>
                         </div>
+                        <p className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                          <span>👤 {f.ownerName || 'Owner'}</span>
+                          {f.personMet && f.personMet !== 'Owner / Director' && (
+                            <span className="text-slate-400">({f.personMet})</span>
+                          )}
+                          {f.city && <span className="text-slate-500">📍 {f.city}</span>}
+                        </p>
                       </div>
+
+                      {/* Urgency Badge */}
+                      <div className="shrink-0 text-right">
+                        <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-md border ${timing.badgeColor}`}>
+                          {timing.pillLabel}
+                        </span>
+                        {timing.timeFormatted && (
+                          <div className="text-[10px] font-bold text-slate-600 mt-0.5">
+                            ⏰ {timing.timeFormatted}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Prominent Timing Countdown Banner */}
+                    <div className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-bold flex items-center justify-between gap-2 ${timing.headerBg}`}>
+                      <span className="flex items-center gap-1.5 truncate">
+                        <Clock size={12} className="shrink-0" />
+                        <span>{timing.countdown}</span>
+                      </span>
+                      <span className="text-[10px] font-semibold opacity-85 shrink-0">
+                        {timing.subText}
+                      </span>
                     </div>
 
                     {/* Next Action */}
                     {f.nextActionItem && (
-                      <div className="mb-2 text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-1.5 rounded-lg border border-amber-200">
+                      <div className="text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-1 rounded-lg border border-amber-200 line-clamp-1">
                         🎯 {f.nextActionItem}
                       </div>
                     )}
 
                     {/* Reminder Note */}
                     {f.reminderNote && (
-                      <p className="text-[10px] text-slate-600 mb-2 italic bg-slate-50 px-2 py-1.5 rounded-lg border border-slate-100">
+                      <p className="text-[10px] text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-100 italic line-clamp-1">
                         📝 {f.reminderNote}
                       </p>
                     )}
 
                     {/* Discussion snippet */}
                     {f.discussionNotes && (
-                      <p className="text-[10px] text-slate-500 mb-2 line-clamp-2 border-l-2 border-amber-200 pl-2 italic">
+                      <p className="text-[10px] text-slate-500 line-clamp-2 border-l-2 border-amber-200 pl-2 italic">
                         "{f.discussionNotes.substring(0, 80)}{f.discussionNotes.length > 80 ? '...' : ''}"
                       </p>
                     )}
 
                     {/* Contact buttons */}
-                    {f.phone && (
-                      <div className="flex items-center gap-1.5 flex-wrap">
+                    {f.phone ? (
+                      <div className="flex items-center gap-1.5 flex-wrap pt-1">
                         <a
                           href={`tel:${f.phone}`}
-                          className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-[11px] font-bold hover:bg-blue-100 transition border border-blue-200"
+                          className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 text-white rounded-lg text-[11px] font-bold hover:bg-blue-700 transition shadow-xs"
+                          title={`Call ${f.phone}`}
                         >
-                          <PhoneCall size={11} /> Call
+                          <PhoneCall size={11} /> Call ({f.phone})
                         </a>
                         <a
                           href={`https://wa.me/91${f.phone.replace(/\D/g, '')}`}
@@ -1027,15 +1095,19 @@ export const StaffDashboard = () => {
                           <MessageCircle size={11} /> WhatsApp
                         </a>
                       </div>
+                    ) : (
+                      <span className="text-[10px] text-slate-400 italic">No phone number</span>
                     )}
                   </div>
 
                   {/* Log follow-up button */}
                   <button
                     onClick={() => openVisitModal(f)}
-                    className={`mt-3 w-full py-2 text-white text-[11px] font-bold rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${isOverdue ? 'bg-rose-600 hover:bg-rose-700' : 'bg-amber-600 hover:bg-amber-700'}`}
+                    className={`mt-3 w-full py-2 text-white text-[11px] font-bold rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                      timing.isOverdue ? 'bg-rose-600 hover:bg-rose-700' : 'bg-amber-600 hover:bg-amber-700'
+                    }`}
                   >
-                    <MapPin size={13} /> Log Follow-up Visit
+                    <RotateCcw size={12} /> Log Follow-up / Re-Visit
                   </button>
                 </div>
               );
@@ -1335,16 +1407,29 @@ export const StaffDashboard = () => {
 
           <div className="p-5 flex-1 divide-y divide-slate-100 space-y-3">
             {myFollowups.length > 0 ? (
-              myFollowups.slice(0, 5).map((f) => (
-                <div key={f.id} className="pt-3 first:pt-0 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <p className="font-bold text-slate-900 text-xs truncate max-w-[160px]">
-                      {f.businessName}
-                    </p>
-                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${f.followUpDate < todayStr ? 'bg-rose-100 text-rose-700' : 'bg-amber-50 text-amber-700'}`}>
-                      {f.followUpDate}
-                    </span>
-                  </div>
+              myFollowups.slice(0, 5).map((f) => {
+                const timing = getFollowUpTimingInfo(f.followUpDate, f.followUpTime);
+                return (
+                  <div key={f.id} className="pt-3 first:pt-0 space-y-1">
+                    <div className="flex items-center justify-between gap-1">
+                      <div className="flex items-center gap-1.5 truncate max-w-[170px]">
+                        <p className="font-bold text-slate-900 text-xs truncate" title={f.businessName}>
+                          {f.businessName}
+                        </p>
+                        <span className={`text-[9px] font-bold px-1 py-0.2 rounded shrink-0 ${
+                          f.status === 'Interested'
+                            ? 'bg-blue-50 text-blue-700'
+                            : f.status === 'Demo Given'
+                            ? 'bg-purple-50 text-purple-700'
+                            : 'bg-amber-50 text-amber-700'
+                        }`}>
+                          {f.status || 'Follow Up'}
+                        </span>
+                      </div>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${timing.badgeColor}`}>
+                        {timing.pillLabel}
+                      </span>
+                    </div>
                   <div className="flex items-center justify-between">
                     <p className="text-[11px] text-slate-500 flex items-center gap-1">
                       <Phone size={11} /> {f.ownerName} ({f.phone})
@@ -1369,7 +1454,8 @@ export const StaffDashboard = () => {
                     )}
                   </div>
                 </div>
-              ))
+              );
+            })
             ) : (
               <p className="text-center text-xs text-slate-400 py-8">
                 No pending follow-ups scheduled.
@@ -1797,13 +1883,44 @@ export const StaffDashboard = () => {
                 />
               </div>
               <div>
-                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">Time Slot</label>
+                <div className="flex items-center justify-between mb-0.5">
+                  <label className="block text-[10px] font-bold text-slate-600">Time Slot</label>
+                  {form.followUpTime && (
+                    <span className="text-[9px] font-black text-amber-800 bg-amber-100/80 px-1.5 py-0.2 rounded border border-amber-300">
+                      ⏰ {formatTime12h(form.followUpTime)}
+                    </span>
+                  )}
+                </div>
                 <input
                   type="time"
                   value={form.followUpTime}
                   onChange={(e) => setForm({ ...form, followUpTime: e.target.value })}
                   className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-900 font-bold outline-none"
                 />
+                {/* Quick Time Presets */}
+                <div className="flex items-center gap-1 mt-1 flex-wrap">
+                  {[
+                    { label: '11 AM', val: '11:00' },
+                    { label: '12 PM', val: '12:00' },
+                    { label: '1:30 PM', val: '13:30' },
+                    { label: '3 PM', val: '15:00' },
+                    { label: '5 PM', val: '17:00' },
+                    { label: '6:30 PM', val: '18:30' },
+                  ].map((p) => (
+                    <button
+                      key={p.val}
+                      type="button"
+                      onClick={() => setForm((prev) => ({ ...prev, followUpTime: p.val }))}
+                      className={`text-[9px] font-bold px-1.5 py-0.5 rounded border transition cursor-pointer ${
+                        form.followUpTime === p.val
+                          ? 'bg-amber-600 text-white border-amber-700'
+                          : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
