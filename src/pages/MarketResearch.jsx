@@ -49,7 +49,14 @@ import toast from 'react-hot-toast';
 
 export const INDIA_STATES_AND_CITIES = {
   'Madhya Pradesh': [
-    'Indore', 'Bhopal', 'Guna', 'Gwalior', 'Jabalpur', 'Ujjain', 'Sagar', 'Rewa', 'Satna', 'Dewas', 'Ratlam', 'Shivpuri', 'Vidisha', 'Khandwa', 'Burhanpur', 'Neemuch', 'Mandsaur', 'Chhindwara', 'Hoshangabad (Narmadapuram)', 'Pithampur', 'Mhow', 'Ashoknagar', 'Datia', 'Damoh', 'Raisen', 'Sehore', 'Betul', 'Harda', 'Khargone', 'Barwani', 'Dhar', 'Jhabua', 'Alirajpur', 'Shajapur', 'Agar Malwa', 'Seoni', 'Balaghat', 'Mandla', 'Dindori', 'Narsinghpur', 'Katni', 'Sidhi', 'Singrauli', 'Shahdol', 'Umaria', 'Anuppur', 'Panna', 'Tikamgarh', 'Chhatarpur', 'Niwari', 'Sheopur', 'Morena', 'Bhind', 'Maihar', 'Pandhurna', 'Mauganj'
+    'Indore', 'Bhopal', 'Guna', 'Gwalior', 'Jabalpur', 'Ujjain', 'Sagar', 'Rewa', 'Satna', 'Dewas',
+    'Ratlam', 'Shivpuri', 'Vidisha', 'Khandwa', 'Burhanpur', 'Neemuch', 'Mandsaur', 'Chhindwara',
+    'Hoshangabad (Narmadapuram)', 'Itarsi', 'Pithampur', 'Mhow', 'Ashoknagar', 'Datia', 'Damoh',
+    'Raisen', 'Sehore', 'Betul', 'Harda', 'Khargone', 'Barwani', 'Dhar', 'Jhabua', 'Alirajpur',
+    'Shajapur', 'Agar Malwa', 'Rajgarh (Biaora)', 'Biaora', 'Seoni', 'Balaghat', 'Mandla', 'Dindori',
+    'Narsinghpur', 'Katni', 'Sidhi', 'Singrauli', 'Shahdol', 'Umaria', 'Anuppur', 'Panna', 'Tikamgarh',
+    'Chhatarpur', 'Niwari', 'Sheopur', 'Morena', 'Bhind', 'Maihar', 'Pandhurna', 'Mauganj', 'Nagda',
+    'Mandideep', 'Jaora', 'Sendhwa', 'Khurai', 'Bina', 'Ganj Basoda', 'Raghogarh', 'Shujalpur'
   ],
   'Rajasthan': [
     'Kota', 'Jaipur', 'Jodhpur', 'Udaipur', 'Ajmer', 'Bikaner', 'Alwar', 'Bhilwara', 'Sikar', 'Bharatpur', 'Sri Ganganagar', 'Pali', 'Chittorgarh', 'Jhunjhunu', 'Hanumangarh', 'Barmer', 'Nagaur', 'Tonk', 'Dausa', 'Bundi', 'Baran', 'Jhalawar', 'Sawai Madhopur', 'Rajsamand', 'Dungarpur', 'Banswara', 'Sirohi', 'Jaisalmer', 'Churu', 'Dholpur', 'Karauli', 'Pratapgarh', 'Beawar', 'Neem Ka Thana', 'Didwana', 'Balotra', 'Phalodi', 'Deeg', 'Kekri'
@@ -422,30 +429,35 @@ export const MarketResearch = () => {
 
         {/* Step 2: Select City / District */}
         <div className="pt-3 border-t border-slate-100">
-          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5 flex items-center justify-between">
-            <span className="flex items-center gap-1.5">
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+            <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
               <span className="w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 text-[11px] font-black flex items-center justify-center">2</span>
-              Target City / District in {selectedState}
+              Target City / District in {selectedState} ({(INDIA_STATES_AND_CITIES[selectedState] || []).length} Cities & Districts)
+            </label>
+            <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+              ⚡ 100% All Cities Included — Click any chip
             </span>
-            <span className="text-[11px] font-normal text-slate-400">Click a city chip or type below</span>
-          </label>
+          </div>
 
-          {/* Dynamic City Chips for selected state (Top primary hubs) */}
-          <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
-            {(INDIA_STATES_AND_CITIES[selectedState] || []).slice(0, 14).map((c) => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => setCityInput(c)}
-                className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${
-                  cityInput.toLowerCase() === c.toLowerCase()
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
-                }`}
-              >
-                {c}
-              </button>
-            ))}
+          {/* Dynamic City Chips for selected state (ALL Districts & Cities) */}
+          <div className="flex flex-wrap items-center gap-1.5 mb-2.5 max-h-56 overflow-y-auto pr-1 p-2.5 bg-slate-50/80 rounded-xl border border-slate-200 shadow-2xs">
+            {(INDIA_STATES_AND_CITIES[selectedState] || []).map((c) => {
+              const isSelected = cityInput.toLowerCase() === c.toLowerCase();
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCityInput(c)}
+                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                    isSelected
+                      ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-600 ring-offset-1 font-bold'
+                      : 'bg-white border border-slate-200 text-slate-700 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-900'
+                  }`}
+                >
+                  {c}
+                </button>
+              );
+            })}
           </div>
 
           <div className="relative">
