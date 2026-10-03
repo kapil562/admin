@@ -1,5 +1,5 @@
-import { collection, getDocs, doc, getDoc, deleteDoc, setDoc, updateDoc } from 'firebase/firestore';
-import { libraryDb } from '../config';
+import { collection, getDocs, doc, getDoc, deleteDoc, setDoc, updateDoc, query, where, addDoc } from 'firebase/firestore';
+import { libraryDb, univoDb } from '../config';
 
 /**
  * Fetch all registered libraries with their real-time subscription status from root 'subscriptions' collection.
@@ -74,6 +74,8 @@ export const getLibraryClients = async () => {
           expiryDate: expiryDate || null,
           registeredDate,
           createdAt: data.createdAt,
+          referredByCode: data.referredByCode || data.referralCode || null,
+          referralStatus: data.referralStatus || (data.referralCode || data.referredByCode ? 'Pending' : null),
           rawSub: subData,
         };
       })
@@ -295,6 +297,7 @@ export const restoreOrCreateLibraryClient = async ({
   phone,
   address,
   planName = 'Trial',
+  referralCode = '',
 }) => {
   const cleanEmail = (email || '').trim().toLowerCase();
   if (!cleanEmail) throw new Error('Valid email address is required');
@@ -326,6 +329,11 @@ export const restoreOrCreateLibraryClient = async ({
     status: 'Active',
     updatedAt: new Date().toISOString(),
   };
+
+  if (referralCode && referralCode.trim() !== '') {
+    libData.referredByCode = referralCode.trim();
+    libData.referralStatus = 'Pending';
+  }
 
   await setDoc(doc(libraryDb, 'libraries', resolvedId), libData, { merge: true });
 
@@ -359,8 +367,13 @@ export const getLibraryDetails = async (tenantId) => {
   const libDoc = await getDoc(doc(libraryDb, 'libraries', tenantId));
   const subDoc = await getDoc(doc(libraryDb, 'subscriptions', tenantId));
 
-  const libraryData = libDoc.exists() ? { id: libDoc.id, ...libDoc.data() } : null;
+  let libraryData = libDoc.exists() ? { id: libDoc.id, ...libDoc.data() } : null;
   const subscriptionData = subDoc.exists() ? { id: subDoc.id, ...subDoc.data() } : null;
+
+  if (libraryData) {
+    libraryData.referredByCode = libraryData.referredByCode || libraryData.referralCode || null;
+    libraryData.referralStatus = libraryData.referralStatus || (libraryData.referralCode || libraryData.referredByCode ? 'Pending' : null);
+  }
 
   if (!libraryData) throw new Error('Library not found');
 
@@ -402,5 +415,78 @@ export const overrideTenantSubscription = async (tenantId, subscriptionData) => 
     overrideReason: reason || 'Manual override by Super Admin'
   }, { merge: true });
 
-  // Optional: Also log this action in transactions or admin audit logs if needed.
+  // Process Marketing Staff Referral if applicable
+  try {
+    const libDocRef = doc(libraryDb, 'libraries', tenantId);
+    const libSnap = await getDoc(libDocRef);
+    if (libSnap.exists()) {
+      const libData = libSnap.data();
+      const codeUsed = libData.referredByCode || libData.referralCode;
+      
+      if (codeUsed) {
+        // Find staff with this referral code
+        const staffQuery = query(collection(univoDb, 'staff_users'), where('referralCode', '==', codeUsed));
+        const staffSnap = await getDocs(staffQuery);
+        
+        if (!staffSnap.empty) {
+          const staffDoc = staffSnap.docs[0];
+          const staffData = staffDoc.data();
+          
+          let commissionAmount = Number(staffData.compensation?.commissionPerDeal) || 500;
+          let commLimit = 1;
+
+          if (planId && planId !== 'custom') {
+            try {
+              const planDoc = await getDoc(doc(libraryDb, 'plans', planId));
+              if (planDoc.exists()) {
+                const pData = planDoc.data();
+                if (typeof pData.commissionLimit !== 'undefined') {
+                  commLimit = Number(pData.commissionLimit);
+                }
+                if (typeof pData.staffCommission !== 'undefined') {
+                  const commVal = Number(pData.staffCommission) || 0;
+                  if (pData.staffCommissionType === 'percentage') {
+                    const price = Number(pData.offerPrice) || 0;
+                    commissionAmount = Math.round((price * commVal) / 100);
+                  } else {
+                    commissionAmount = commVal;
+                  }
+                }
+              }
+            } catch (e) { console.warn('Could not fetch plan for commission', e); }
+          }
+          
+          const currentCount = Number(libData.commissionPaidCount) || 0;
+
+          // Check if eligible for commission this time
+          if (commLimit === 0 || currentCount < commLimit) {
+            const currentWallet = Number(staffData.walletBalance) || 0;
+            
+            // Update staff wallet
+            await updateDoc(doc(univoDb, 'staff_users', staffDoc.id), {
+              walletBalance: currentWallet + commissionAmount
+            });
+            
+            // Add a record in a subcollection for transaction history
+            await addDoc(collection(univoDb, 'staff_users', staffDoc.id, 'commission_history'), {
+              libraryId: tenantId,
+              libraryName: libData.libraryName || libData.studyPointName || 'Unknown Library',
+              amount: commissionAmount,
+              planPurchased: planName || 'Custom Plan',
+              payoutNumber: currentCount + 1,
+              date: new Date().toISOString()
+            });
+
+            // Mark library referral status and increment count
+            await updateDoc(libDocRef, {
+              referralStatus: 'Active',
+              commissionPaidCount: currentCount + 1
+            });
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error processing staff referral commission:', error);
+  }
 };

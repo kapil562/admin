@@ -56,6 +56,7 @@ const navigationGroups = [
       { name: 'Coupons & Promos', path: '/coupons', icon: Ticket, module: 'coupons' },
 
       { name: 'Staff & Roles', path: '/staff', icon: UserCog, module: 'staff' },
+      { name: 'Staff Commissions', path: '/commissions', icon: Wallet, module: 'staff' },
     ],
   },
 ];

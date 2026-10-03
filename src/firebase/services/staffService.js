@@ -90,18 +90,41 @@ export const ROLE_PRESETS = {
  * Fetch all staff users
  */
 export const getStaffUsers = async () => {
+  const processDocs = async (docs) => {
+    const staffList = [];
+    for (const d of docs) {
+      const data = d.data();
+      let referralCode = data.referralCode;
+      
+      if (!referralCode) {
+        referralCode = `UNIVO-${(data.name || 'STAFF').substring(0, 3).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+        try {
+          await updateDoc(doc(univoDb, 'staff_users', d.id), {
+            referralCode,
+            walletBalance: data.walletBalance || 0
+          });
+        } catch(e) { console.warn('Could not auto-heal referralCode', e); }
+      }
+      
+      staffList.push({
+        id: d.id,
+        ...data,
+        referralCode,
+        walletBalance: data.walletBalance || 0
+      });
+    }
+    return staffList;
+  };
+
   try {
     const q = query(collection(univoDb, 'staff_users'), orderBy('createdAt', 'desc'));
     const snap = await getDocs(q);
-    return snap.docs.map((d) => ({
-      id: d.id,
-      ...d.data(),
-    }));
+    return await processDocs(snap.docs);
   } catch (err) {
     console.warn('Fallback staff fetch:', err);
     try {
       const snap = await getDocs(collection(univoDb, 'staff_users'));
-      return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      return await processDocs(snap.docs);
     } catch (e) {
       console.error('Error fetching staff users:', e);
       return [];
@@ -129,6 +152,8 @@ export const addStaffUser = async (staffData) => {
       dailyTargetDeals: isOwner ? 0 : Number(staffData.compensation?.dailyTargetDeals) || 0,
     },
     permissions: staffData.permissions || ROLE_PRESETS[staffData.role]?.permissions || {},
+    referralCode: staffData.referralCode || `UNIVO-${(staffData.name || 'STAFF').substring(0, 3).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`,
+    walletBalance: 0,
     createdAt: new Date().toISOString(),
   };
 

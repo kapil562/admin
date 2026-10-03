@@ -26,7 +26,7 @@ import {
   Plus,
   Edit2,
   Trash2,
-  Phone,
+  Phone, Gift,
   Mail,
   Lock,
   Eye,

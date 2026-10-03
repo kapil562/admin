@@ -19,6 +19,7 @@ import { FieldMarketing } from './pages/FieldMarketing';
 import { FieldReports } from './pages/FieldReports';
 import { StaffAttendance } from './pages/StaffAttendance';
 import { StaffManagement } from './pages/StaffManagement';
+import { StaffCommissions } from './pages/StaffCommissions';
 import { CouponsManagement } from './pages/CouponsManagement';
 import { MarketResearch } from './pages/MarketResearch';
 
@@ -72,6 +73,7 @@ export default function App() {
               <Route path="/queries" element={<UserQueries />} />
               <Route path="/reports" element={<Reports />} />
               <Route path="/staff" element={<StaffManagement />} />
+              <Route path="/commissions" element={<StaffCommissions />} />
               <Route path="/coupons" element={<CouponsManagement />} />
 
               <Route path="*" element={<Navigate to="/" replace />} />

@@ -61,6 +61,9 @@ export const PlansManagement = () => {
     maxStudents: 100,
     purchaseLimit: 0,
     purchasedCount: 0,
+    staffCommission: 0,
+    staffCommissionType: 'flat',
+    commissionLimit: 1,
     modules: ['Dashboard', 'Settings'],
     features: ['Unlimited Seats', 'Standard Support'],
     isActive: true,
@@ -191,6 +194,9 @@ export const PlansManagement = () => {
         maxStudents: plan.maxStudents ?? 0,
         purchaseLimit: plan.purchaseLimit ?? 0,
         purchasedCount: plan.purchasedCount ?? 0,
+        staffCommission: plan.staffCommission ?? 0,
+        staffCommissionType: plan.staffCommissionType || 'flat',
+        commissionLimit: plan.commissionLimit ?? 1,
         modules: plan.modules || ['Dashboard', 'Settings'],
         features: plan.features || ['Unlimited Seats'],
         isActive: plan.isActive !== undefined ? plan.isActive : true,
@@ -207,6 +213,9 @@ export const PlansManagement = () => {
         maxStudents: 0,
         purchaseLimit: 0,
         purchasedCount: 0,
+        staffCommission: 0,
+        staffCommissionType: 'flat',
+        commissionLimit: 1,
         modules: ['Dashboard', 'Settings'],
         features: ['Unlimited Seats', 'Standard Support'],
         isActive: true,
@@ -424,6 +433,14 @@ export const PlansManagement = () => {
                       <span className="text-slate-400 font-medium">Validity Duration:</span>
                       <span className="font-bold text-slate-800">
                         {plan.durationDays > 0 ? `${plan.durationDays} Days` : 'Lifetime'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400 font-medium">Staff Commission:</span>
+                      <span className="font-bold text-indigo-600">
+                        {plan.staffCommissionType === 'percentage' 
+                          ? `${plan.staffCommission || 0}%` 
+                          : `₹${plan.staffCommission || 0}`}
                       </span>
                     </div>
                     {plan.purchaseLimit > 0 && (
@@ -955,6 +972,44 @@ export const PlansManagement = () => {
                 onChange={(e) => setSubForm({ ...subForm, discountText: e.target.value })}
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
               />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Staff Commission
+              </label>
+              <div className="flex gap-2">
+                <select
+                  value={subForm.staffCommissionType}
+                  onChange={(e) => setSubForm({ ...subForm, staffCommissionType: e.target.value })}
+                  className="w-1/3 px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
+                >
+                  <option value="flat">₹ Flat</option>
+                  <option value="percentage">%</option>
+                </select>
+                <input
+                  type="number"
+                  placeholder={subForm.staffCommissionType === 'percentage' ? "e.g. 10" : "e.g. 500"}
+                  value={subForm.staffCommission}
+                  onChange={(e) => setSubForm({ ...subForm, staffCommission: e.target.value })}
+                  className="w-2/3 px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1" title="How many times the staff gets paid when the library renews this plan.">
+                Commission Duration
+              </label>
+              <select
+                value={subForm.commissionLimit}
+                onChange={(e) => setSubForm({ ...subForm, commissionLimit: Number(e.target.value) })}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 outline-none focus:border-blue-600"
+              >
+                <option value={1}>1 Time Only (First Purchase)</option>
+                <option value={3}>3 Times (First 3 Renewals)</option>
+                <option value={6}>6 Times (First 6 Renewals)</option>
+                <option value={12}>12 Times (First 12 Renewals)</option>
+                <option value={0}>Lifetime (Every Time)</option>
+              </select>
             </div>
           </div>
 

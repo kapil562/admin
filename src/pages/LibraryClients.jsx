@@ -78,6 +78,7 @@ export const LibraryClients = () => {
     address: '',
     planName: 'Trial',
     tenantId: '',
+    referralCode: '',
   });
 
   const { data: clients = [], isLoading, refetch } = useQuery({
