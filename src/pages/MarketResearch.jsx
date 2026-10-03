@@ -49,14 +49,23 @@ import toast from 'react-hot-toast';
 
 export const INDIA_STATES_AND_CITIES = {
   'Madhya Pradesh': [
-    'Indore', 'Bhopal', 'Guna', 'Gwalior', 'Jabalpur', 'Ujjain', 'Sagar', 'Rewa', 'Satna', 'Dewas',
-    'Ratlam', 'Shivpuri', 'Vidisha', 'Khandwa', 'Burhanpur', 'Neemuch', 'Mandsaur', 'Chhindwara',
-    'Hoshangabad (Narmadapuram)', 'Itarsi', 'Pithampur', 'Mhow', 'Ashoknagar', 'Datia', 'Damoh',
-    'Raisen', 'Sehore', 'Betul', 'Harda', 'Khargone', 'Barwani', 'Dhar', 'Jhabua', 'Alirajpur',
-    'Shajapur', 'Agar Malwa', 'Rajgarh (Biaora)', 'Biaora', 'Seoni', 'Balaghat', 'Mandla', 'Dindori',
-    'Narsinghpur', 'Katni', 'Sidhi', 'Singrauli', 'Shahdol', 'Umaria', 'Anuppur', 'Panna', 'Tikamgarh',
-    'Chhatarpur', 'Niwari', 'Sheopur', 'Morena', 'Bhind', 'Maihar', 'Pandhurna', 'Mauganj', 'Nagda',
-    'Mandideep', 'Jaora', 'Sendhwa', 'Khurai', 'Bina', 'Ganj Basoda', 'Raghogarh', 'Shujalpur'
+    'Agar Malwa', 'Alirajpur', 'Anuppur', 'Ashoknagar',
+    'Balaghat', 'Barwani', 'Betul', 'Bhind', 'Bhopal', 'Biaora', 'Bina', 'Burhanpur',
+    'Chhatarpur', 'Chhindwara',
+    'Damoh', 'Datia', 'Dewas', 'Dhar', 'Dindori',
+    'Ganj Basoda', 'Guna', 'Gwalior',
+    'Harda', 'Hoshangabad (Narmadapuram)',
+    'Indore', 'Itarsi',
+    'Jabalpur', 'Jaora', 'Jhabua',
+    'Katni', 'Khandwa', 'Khargone', 'Khurai',
+    'Maihar', 'Mandideep', 'Mandla', 'Mandsaur', 'Mauganj', 'Mhow', 'Morena',
+    'Nagda', 'Narsinghpur', 'Neemuch', 'Niwari',
+    'Pandhurna', 'Panna', 'Pithampur',
+    'Raghogarh', 'Raisen', 'Rajgarh (Biaora)', 'Ratlam', 'Rewa',
+    'Sagar', 'Satna', 'Sehore', 'Sendhwa', 'Seoni', 'Shahdol', 'Shajapur', 'Sheopur', 'Shivpuri', 'Shujalpur', 'Sidhi', 'Singrauli',
+    'Tikamgarh',
+    'Ujjain', 'Umaria',
+    'Vidisha'
   ],
   'Rajasthan': [
     'Kota', 'Jaipur', 'Jodhpur', 'Udaipur', 'Ajmer', 'Bikaner', 'Alwar', 'Bhilwara', 'Sikar', 'Bharatpur', 'Sri Ganganagar', 'Pali', 'Chittorgarh', 'Jhunjhunu', 'Hanumangarh', 'Barmer', 'Nagaur', 'Tonk', 'Dausa', 'Bundi', 'Baran', 'Jhalawar', 'Sawai Madhopur', 'Rajsamand', 'Dungarpur', 'Banswara', 'Sirohi', 'Jaisalmer', 'Churu', 'Dholpur', 'Karauli', 'Pratapgarh', 'Beawar', 'Neem Ka Thana', 'Didwana', 'Balotra', 'Phalodi', 'Deeg', 'Kekri'
@@ -439,25 +448,28 @@ export const MarketResearch = () => {
             </span>
           </div>
 
-          {/* Dynamic City Chips for selected state (ALL Districts & Cities) */}
+          {/* Dynamic City Chips for selected state (ALL Districts & Cities sorted A to Z) */}
           <div className="flex flex-wrap items-center gap-1.5 mb-2.5 max-h-56 overflow-y-auto pr-1 p-2.5 bg-slate-50/80 rounded-xl border border-slate-200 shadow-2xs">
-            {(INDIA_STATES_AND_CITIES[selectedState] || []).map((c) => {
-              const isSelected = cityInput.toLowerCase() === c.toLowerCase();
-              return (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => setCityInput(c)}
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
-                    isSelected
-                      ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-600 ring-offset-1 font-bold'
-                      : 'bg-white border border-slate-200 text-slate-700 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-900'
-                  }`}
-                >
-                  {c}
-                </button>
-              );
-            })}
+            {(INDIA_STATES_AND_CITIES[selectedState] || [])
+              .slice()
+              .sort((a, b) => a.localeCompare(b))
+              .map((c) => {
+                const isSelected = cityInput.toLowerCase() === c.toLowerCase();
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setCityInput(c)}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                      isSelected
+                        ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-600 ring-offset-1 font-bold'
+                        : 'bg-white border border-slate-200 text-slate-700 hover:bg-indigo-50 hover:border-indigo-300 hover:text-indigo-900'
+                    }`}
+                  >
+                    {c}
+                  </button>
+                );
+              })}
           </div>
 
           <div className="relative">
@@ -470,9 +482,12 @@ export const MarketResearch = () => {
               className="w-full px-4 py-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
             />
             <datalist id="city-suggestions">
-              {(INDIA_STATES_AND_CITIES[selectedState] || []).map((c) => (
-                <option key={c} value={c} />
-              ))}
+              {(INDIA_STATES_AND_CITIES[selectedState] || [])
+                .slice()
+                .sort((a, b) => a.localeCompare(b))
+                .map((c) => (
+                  <option key={c} value={c} />
+                ))}
             </datalist>
           </div>
 
