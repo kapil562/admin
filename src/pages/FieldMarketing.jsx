@@ -1524,13 +1524,20 @@ export const FieldMarketing = () => {
       .sort((a, b) => b.count - a.count);
   }, [nearbyLibraries, activeCityName]);
 
-  // Computed Visited vs Unvisited for discovery places
+  // Computed Visited vs Unvisited for discovery places (reflects live Radius filter)
   const nearbyCounts = useMemo(() => {
     let visited = 0;
     let unvisited = 0;
-    const targetList = selectedNearbyArea === 'All'
+    const hasRadius = searchRadius !== '' && searchRadius !== 'all' && Number(searchRadius) > 0;
+    const radiusMeters = hasRadius ? Number(searchRadius) : null;
+
+    let targetList = selectedNearbyArea === 'All'
       ? nearbyLibraries
       : nearbyLibraries.filter((p) => (p.locality || extractLocality(p.address, activeCityName)) === selectedNearbyArea);
+
+    if (radiusMeters != null) {
+      targetList = targetList.filter((p) => p.distance == null || isNaN(p.distance) || p.distance <= radiusMeters);
+    }
 
     targetList.forEach((place) => {
       const history = getPlaceVisitHistory(place.placeId, place.name);
@@ -1538,10 +1545,11 @@ export const FieldMarketing = () => {
       else unvisited++;
     });
     return { all: targetList.length, unvisited, visited };
-  }, [nearbyLibraries, selectedNearbyArea, getPlaceVisitHistory, activeCityName]);
+  }, [nearbyLibraries, selectedNearbyArea, getPlaceVisitHistory, activeCityName, searchRadius]);
 
   const filteredNearbyLibraries = useMemo(() => {
-    return nearbyLibraries.filter((place) => {
+    // 1. Filter by Area/Locality & Visited status
+    let list = nearbyLibraries.filter((place) => {
       if (selectedNearbyArea !== 'All') {
         const loc = place.locality || extractLocality(place.address, activeCityName);
         if (loc !== selectedNearbyArea) return false;
@@ -1551,7 +1559,27 @@ export const FieldMarketing = () => {
       if (nearbyVisitFilter === 'visited') return isVisited;
       return true;
     });
-  }, [nearbyLibraries, selectedNearbyArea, nearbyVisitFilter, getPlaceVisitHistory, activeCityName]);
+
+    // 2. Filter by Radius (in meters) if selected
+    const hasRadius = searchRadius !== '' && searchRadius !== 'all' && Number(searchRadius) > 0;
+    if (hasRadius) {
+      const radiusMeters = Number(searchRadius);
+      list = list.filter((p) => {
+        if (p.distance != null && !isNaN(p.distance)) {
+          return p.distance <= radiusMeters;
+        }
+        return true;
+      });
+    }
+
+    // 3. Filter by Limit count (Top N nearest) if selected
+    const hasLimit = searchLimit !== '' && searchLimit !== 'all' && Number(searchLimit) > 0;
+    if (hasLimit) {
+      list = list.slice(0, Number(searchLimit));
+    }
+
+    return list;
+  }, [nearbyLibraries, selectedNearbyArea, nearbyVisitFilter, getPlaceVisitHistory, activeCityName, searchRadius, searchLimit]);
 
   // Visit count per place or business name (Visit #1, Visit #2, etc.)
   const getVisitNumber = useCallback(
@@ -2295,7 +2323,7 @@ export const FieldMarketing = () => {
                     } else {
                       const r = e.target.value === '' ? '' : (e.target.value === 'all' ? 'all' : Number(e.target.value));
                       setSearchRadius(r);
-                      if (nearbySearchDone && manualSearchQuery.trim()) {
+                      if (nearbySearchDone && manualSearchQuery.trim() && !activeTargetCity) {
                         const hasR = r !== '' && r !== 'all' && Number(r) > 0;
                         const hasL = searchLimit !== '' && searchLimit !== 'all' && Number(searchLimit) > 0;
                         if (hasR || hasL || r === 'all' || searchLimit === 'all') {
@@ -2357,7 +2385,7 @@ export const FieldMarketing = () => {
                     } else {
                       const l = e.target.value === '' ? '' : (e.target.value === 'all' ? 'all' : Number(e.target.value));
                       setSearchLimit(l);
-                      if (nearbySearchDone && manualSearchQuery.trim()) {
+                      if (nearbySearchDone && manualSearchQuery.trim() && !activeTargetCity) {
                         const hasR = searchRadius !== '' && searchRadius !== 'all' && Number(searchRadius) > 0;
                         const hasL = l !== '' && l !== 'all' && Number(l) > 0;
                         if (hasR || hasL || searchRadius === 'all' || l === 'all') {
@@ -2400,9 +2428,14 @@ export const FieldMarketing = () => {
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-3.5 pb-3 border-b border-slate-200/80">
                   <div>
                     <p className="text-xs font-bold text-slate-800">
-                      Found <span className="text-blue-600 font-extrabold">{nearbyLibraries.length}</span> {activeCategory === 'gym' ? 'gyms' : 'libraries'}
+                      Showing <span className="text-blue-600 font-extrabold">{filteredNearbyLibraries.length}</span> {activeCategory === 'gym' ? 'gyms' : 'libraries'}
                       {searchRadius > 0 ? ` within ${searchRadius / 1000} km` : ''}
                       {searchLimit > 0 ? ` (top ${searchLimit})` : ''}
+                      {nearbyLibraries.length !== filteredNearbyLibraries.length && (
+                        <span className="text-slate-400 font-normal ml-1">
+                          (out of {nearbyLibraries.length} total in {activeTargetCity || 'city'})
+                        </span>
+                      )}
                     </p>
                     <p className="text-[11px] text-slate-400 font-medium">Sorted strictly by nearest distance</p>
                   </div>
