@@ -5,6 +5,7 @@ import { getFieldVisits, logFieldVisit, updateFieldVisit, updateVisitStatus, del
 import { getStaffUsers, calculateStaffPayroll } from '../firebase/services/staffService';
 import { searchNearbyLibraries, searchLibrariesByText, formatDistance, calculateDistance, getNavigationUrl, getPlaceMapUrl, geocodeAddress, reverseGeocode, parseAddressDetails, getPlaceDetails } from '../services/googleMapsService';
 import { runCityMarketResearch, extractLocality } from '../firebase/services/marketResearchService';
+import { getFieldMarketingTargets, getAvailableTargetCities, updateTargetStatusOnVisit } from '../firebase/services/targetSyncService';
 import { getFollowUpTimingInfo, sortDueFollowUps, formatTime12h } from '../services/followUpTimingHelper';
 import { useAuth } from '../context/AuthContext';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -205,6 +206,7 @@ const initialFormState = {
   placeRating: null,
   placeLat: null,
   placeLng: null,
+  targetId: null,
 };
 
 const RADIUS_OPTIONS = [
@@ -311,6 +313,8 @@ export const FieldMarketing = () => {
   const [nearbyVisitFilter, setNearbyVisitFilter] = useState('all'); // 'all' | 'unvisited' | 'visited'
   const [selectedNearbyArea, setSelectedNearbyArea] = useState('All');
   const [showDiscovery, setShowDiscovery] = useState(true);
+  const [activeTargetCity, setActiveTargetCity] = useState(null);
+  const [loadingTargetCity, setLoadingTargetCity] = useState(null);
 
   const isSuperAdmin = user?.role === 'super_admin';
 
@@ -320,6 +324,13 @@ export const FieldMarketing = () => {
 
   // Form state
   const [form, setForm] = useState(initialFormState);
+
+  // Fetch available target cities synced from Market Research
+  const { data: availableTargetCities = [], refetch: refetchTargetCities } = useQuery({
+    queryKey: ['field_marketing_target_cities'],
+    queryFn: getAvailableTargetCities,
+    staleTime: 30000,
+  });
 
   // Fetch staff users for management and compensation targets
   const { data: staffList = [] } = useQuery({
@@ -353,6 +364,14 @@ export const FieldMarketing = () => {
     mutationFn: logFieldVisit,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin_field_visits'] });
+      if (form.targetId) {
+        updateTargetStatusOnVisit(
+          form.targetId,
+          form.status || 'Interested',
+          user?.displayName || user?.name || (isSuperAdmin ? 'Admin' : 'Staff')
+        ).catch(console.warn);
+        queryClient.invalidateQueries({ queryKey: ['field_marketing_target_cities'] });
+      }
       toast.success('Field visit logged with GPS! ✅');
       setShowModal(false);
       setEditingVisit(null);
@@ -457,17 +476,22 @@ export const FieldMarketing = () => {
     try {
       let query = (customQuery != null ? customQuery : manualSearchQuery).trim();
       if (!query) {
-        toast.error('Search query is compulsory! Please enter what to search.');
-        setSearchingNearby(false);
-        return;
+        // If GPS is active or available, default to category search so field staff never gets blocked
+        if (targetLoc?.latitude && targetLoc?.longitude) {
+          query = category === 'gym' ? 'gym' : 'study library';
+        } else {
+          toast.error('Please enter a library name, area, colony, or city to search.');
+          setSearchingNearby(false);
+          return;
+        }
       }
 
       // Check if query is targeting a city, corridor or full metropolitan coverage
-      const cityCorridorRegex = /(indore|pithampur|pitampur|mr\s*10|aurobindo|aurbindo|lavkush|lovekush|super\s*corridor|bhawar\s*kuan|bhanwarkuan|vijay\s*nagar|sudama\s*nagar|rau|silicon\s*city|palasia|geeta\s*bhawan|rajwada|sukliya|sukhliya|khajrana|bengali|mhow|kota|gwalior|bhopal|ujjain|jabalpur|jaipur|delhi|mumbai|pune|ahmedabad|surat|lucknow|kanpur|agra|patna|chandigarh|vadodara|dehradun|meerut|varanasi|prayagraj|dewas|ratlam|sagar|rewa|satna)/i;
+      const cityCorridorRegex = /(indore|pithampur|pitampur|mr\s*10|aurobindo|aurbindo|lavkush|lovekush|super\s*corridor|bhawar\s*kuan|bhanwarkuan|vijay\s*nagar|sudama\s*nagar|rau|silicon\s*city|palasia|geeta\s*bhawan|rajwada|sukliya|sukhliya|khajrana|bengali|mhow|guna|kota|gwalior|bhopal|ujjain|jabalpur|jaipur|delhi|mumbai|pune|ahmedabad|surat|lucknow|kanpur|agra|patna|chandigarh|vadodara|dehradun|meerut|varanasi|prayagraj|dewas|ratlam|sagar|rewa|satna|khandwa|burhanpur|neemuch|mandsaur|shivpuri|vidisha)/i;
       const isCityOrCorridor = cityCorridorRegex.test(query);
       const isFullCoverage = (radius == null || radius === '') && (limit == null || limit === '');
 
-      // ONLY run heavy 11-zone exhaustive scan when user explicitly chooses Full Coverage (both radius and limit empty)
+      // ONLY run heavy multi-zone exhaustive scan when user explicitly chooses Full Coverage (both radius and limit empty)
       if (isFullCoverage && isCityOrCorridor) {
         let targetCity = 'Indore';
         const match = query.match(cityCorridorRegex);
@@ -576,6 +600,7 @@ export const FieldMarketing = () => {
           gwalior: { lat: 26.2183, lng: 78.1828 },
           jabalpur: { lat: 23.1815, lng: 79.9864 },
           ujjain: { lat: 23.1765, lng: 75.7885 },
+          guna: { lat: 24.6324, lng: 77.3002 },
           kota: { lat: 25.2138, lng: 75.8648 },
           jaipur: { lat: 26.9124, lng: 75.7873 },
           delhi: { lat: 28.6139, lng: 77.2090 },
@@ -596,6 +621,25 @@ export const FieldMarketing = () => {
             }
           } catch (e) {
             // fallback
+          }
+        }
+      } else {
+        // If user typed a specific colony or area (e.g. "Sisodiya Colony") that isn't a city
+        const cleanLower = query.toLowerCase();
+        const isGenericTerm = ['library', 'gym', 'study', 'pustakalaya', 'fitness'].some((w) => cleanLower === w);
+        if (!isGenericTerm && query.length >= 3) {
+          try {
+            const currentCity = currentLocationName ? currentLocationName.replace(/\s*\(Default Location\)/gi, '').split(',')[0].trim() : '';
+            const geoAddress = currentCity && !cleanLower.includes(currentCity.toLowerCase())
+              ? `${query}, ${currentCity}, India`
+              : `${query}, India`;
+            const geo = await geocodeAddress(geoAddress);
+            if (geo?.latitude && geo?.longitude) {
+              searchLat = geo.latitude;
+              searchLng = geo.longitude;
+            }
+          } catch (geoErr) {
+            // keep targetLoc coordinates
           }
         }
       }
@@ -700,6 +744,23 @@ export const FieldMarketing = () => {
       const rev = await reverseGeocode(loc.latitude, loc.longitude);
       const locName = rev.cityName || rev.formattedAddress || 'Your Live Location';
       setCurrentLocationName(locName);
+
+      // If nearby places are already loaded, recalculate distances & re-sort
+      setNearbyLibraries((prev) => {
+        if (!prev || prev.length === 0) return prev;
+        const updated = prev.map((p) => {
+          if (!p.lat || !p.lng) return p;
+          const distMeters = calculateDistance(loc.latitude, loc.longitude, p.lat, p.lng);
+          return {
+            ...p,
+            distance: distMeters,
+            distanceFormatted: formatDistance(distMeters),
+          };
+        });
+        updated.sort((a, b) => (a.distance ?? 99999999) - (b.distance ?? 99999999));
+        return updated;
+      });
+
       if (isManual) {
         toast.success(`GPS Connected: ${locName}`);
       }
@@ -720,9 +781,80 @@ export const FieldMarketing = () => {
 
   const handleCategorySwitch = (cat) => {
     setActiveCategory(cat);
+    setActiveTargetCity(null);
     setManualSearchQuery('');
     setNearbyLibraries([]);
     setNearbySearchDone(false);
+  };
+
+  // ── Load City Target Roster from Firestore (0₹ Cost, Instant Load) ──────
+  const handleLoadCityTargetRoster = async (cityName, catOverride) => {
+    const categoryToLoad = catOverride || activeCategory;
+    setActiveTargetCity(cityName);
+    setLoadingTargetCity(cityName);
+    try {
+      toast.loading(`Loading targets for ${cityName}...`, { id: 'targets-load' });
+      const targets = await getFieldMarketingTargets({ city: cityName, category: categoryToLoad });
+      if (!targets || targets.length === 0) {
+        toast.dismiss('targets-load');
+        toast(`No saved targets found for ${cityName} (${categoryToLoad}). Run Market Research and click "🚀 Send / Sync to Field Team" first.`, { icon: 'ℹ️' });
+        return;
+      }
+
+      // Map targets with distance from current live GPS
+      const placesWithDist = targets.map((t) => {
+        let distMeters = null;
+        let distFormatted = 'In City';
+        if (myLocation?.latitude && myLocation?.longitude && t.lat && t.lng) {
+          distMeters = calculateDistance(myLocation.latitude, myLocation.longitude, t.lat, t.lng);
+          distFormatted = formatDistance(distMeters);
+        } else if (t.distanceMeters) {
+          distMeters = t.distanceMeters;
+          distFormatted = formatDistance(t.distanceMeters);
+        }
+
+        return {
+          placeId: t.placeId || t.id,
+          targetId: t.id,
+          name: t.businessName || t.name,
+          address: t.address || '',
+          locality: t.locality || extractLocality(t.address, cityName),
+          phone: t.phone || '',
+          lat: t.lat,
+          lng: t.lng,
+          rating: t.rating || null,
+          totalRatings: t.totalRatings || null,
+          mapsUrl: t.mapsUrl || null,
+          distance: distMeters,
+          distanceFormatted: distFormatted,
+          durationFormatted: '',
+          isOpen: null,
+          isTargetLead: true,
+          isNewLead: t.isNewLead || false,
+          targetStatus: t.status || 'Untapped',
+          visitCount: t.visitCount || 0,
+          lastVisitedAt: t.lastVisitedAt || null,
+        };
+      });
+
+      // Sort strictly nearest to farthest if GPS is active
+      if (myLocation?.latitude && myLocation?.longitude) {
+        placesWithDist.sort((a, b) => (a.distance ?? 99999999) - (b.distance ?? 99999999));
+      }
+
+      setNearbyLibraries(placesWithDist);
+      setSelectedNearbyArea('All');
+      setNearbySearchDone(true);
+      setManualSearchQuery(cityName);
+      toast.dismiss('targets-load');
+      toast.success(`🎯 Loaded ${placesWithDist.length} targets for ${cityName}! (Sorted nearest to you)`);
+    } catch (err) {
+      console.error('Failed to load target roster:', err);
+      toast.dismiss('targets-load');
+      toast.error('Failed to load targets');
+    } finally {
+      setLoadingTargetCity(null);
+    }
   };
 
   const handleManualSearch = (e) => {
@@ -862,6 +994,7 @@ export const FieldMarketing = () => {
       city: parsed.city || '',
       address: parsed.area || place.address || '',
       placeId: place.placeId,
+      targetId: place.targetId || null,
       placeName: place.name || '',
       placeAddress: place.address || '',
       placeRating: place.rating,
@@ -1374,8 +1507,9 @@ export const FieldMarketing = () => {
   );
 
   const activeCityName = useMemo(() => {
+    if (activeTargetCity) return activeTargetCity;
     return currentLocationName ? currentLocationName.replace(/\s*\(Default Location\)/gi, '').split(',')[0].trim() : '';
-  }, [currentLocationName]);
+  }, [currentLocationName, activeTargetCity]);
 
   // Area / Locality Breakdown for discovery places (Konsa area ma kitni library ha)
   const nearbyAreaBreakdown = useMemo(() => {
@@ -2039,6 +2173,74 @@ export const FieldMarketing = () => {
         </div>
 
         <div className="p-5 space-y-4">
+          {/* 🎯 Curated City Target Roster (Synced from Market Research) */}
+          {availableTargetCities.length > 0 && (
+            <div className="p-3.5 bg-gradient-to-r from-blue-50/90 via-indigo-50/70 to-purple-50/90 rounded-2xl border border-blue-200/80 shadow-2xs space-y-2.5">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-lg bg-blue-600 text-white flex items-center justify-center text-xs font-black shadow-xs">
+                    🎯
+                  </span>
+                  <span className="text-xs font-black text-slate-900 tracking-tight">
+                    Saved City Targets (0₹ API Cost · Smart Delta Sync)
+                  </span>
+                  <span className="text-[10px] font-bold text-blue-700 bg-blue-100/80 px-2 py-0.5 rounded-full">
+                    Synced from Market Research
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => refetchTargetCities()}
+                  title="Refresh target cities list"
+                  className="text-[11px] font-bold text-slate-500 hover:text-blue-600 flex items-center gap-1 cursor-pointer transition"
+                >
+                  <RotateCcw size={11} /> Refresh
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {availableTargetCities
+                  .filter((c) => !activeCategory || c.category === activeCategory)
+                  .map((tc) => {
+                    const isActive = activeTargetCity === tc.city;
+                    const isLoadingThis = loadingTargetCity === tc.city;
+                    return (
+                      <button
+                        key={`${tc.city}_${tc.category}`}
+                        type="button"
+                        onClick={() => handleLoadCityTargetRoster(tc.city, tc.category)}
+                        disabled={isLoadingThis}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-2xs ${
+                          isActive
+                            ? 'bg-blue-600 text-white shadow-md shadow-blue-500/25 ring-2 ring-blue-600 ring-offset-1'
+                            : 'bg-white text-slate-700 border border-slate-200 hover:border-blue-400 hover:bg-blue-50/50'
+                        }`}
+                      >
+                        {isLoadingThis ? (
+                          <Loader2 size={12} className="animate-spin text-blue-600" />
+                        ) : (
+                          <span>📍 {tc.city}</span>
+                        )}
+                        {tc.state && <span className="text-[10px] opacity-70">({tc.state})</span>}
+                        <span
+                          className={`px-1.5 py-0.5 rounded-md text-[10px] font-black ${
+                            isActive ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-800'
+                          }`}
+                        >
+                          {tc.totalCount}
+                        </span>
+                        {tc.newLeadsCount > 0 && (
+                          <span className="px-1.5 py-0.5 rounded-md text-[9px] font-black bg-amber-400 text-amber-950 animate-pulse">
+                            +{tc.newLeadsCount} NEW
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+          )}
+
           {/* Search Controls */}
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
             <div className="flex-1 min-w-[200px]">
@@ -2343,6 +2545,16 @@ export const FieldMarketing = () => {
                                   <MapPin size={10} className="text-blue-500" />
                                   {place.locality || extractLocality(place.address, activeCityName)}
                                 </span>
+                                {place.isNewLead && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500 text-white font-black text-[10px] animate-pulse">
+                                    ✨ NEW LEAD
+                                  </span>
+                                )}
+                                {place.isTargetLead && (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 font-bold text-[10px] border border-indigo-200">
+                                    🎯 Target
+                                  </span>
+                                )}
                                 {place.phone && (
                                   <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600 font-semibold text-[10px]">
                                     <Phone size={9} />
@@ -2410,7 +2622,7 @@ export const FieldMarketing = () => {
                           )}
 
                           {/* Action Buttons */}
-                          <div className="flex items-center gap-2 pt-1">
+                          <div className="flex items-center gap-1.5 pt-1">
                             {myLocation && (
                               <a
                                 href={getNavigationUrl(myLocation.latitude, myLocation.longitude, place.lat, place.lng)}
@@ -2421,6 +2633,26 @@ export const FieldMarketing = () => {
                                 <Compass size={13} />
                                 Navigate
                               </a>
+                            )}
+                            {place.phone && (
+                              <div className="flex items-center gap-1 shrink-0">
+                                <a
+                                  href={`tel:${place.phone}`}
+                                  className="w-8 h-8 rounded-lg bg-blue-50 border border-blue-200 text-blue-600 hover:bg-blue-100 flex items-center justify-center transition"
+                                  title="Call"
+                                >
+                                  <PhoneCall size={12} />
+                                </a>
+                                <a
+                                  href={`https://wa.me/91${place.phone.replace(/\D/g, '')}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-600 hover:bg-emerald-100 flex items-center justify-center transition"
+                                  title="WhatsApp"
+                                >
+                                  <MessageCircle size={12} />
+                                </a>
+                              </div>
                             )}
                             {hasPermission('marketing', 'create') && (
                               <button

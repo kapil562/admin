@@ -181,23 +181,57 @@ export const getPlaceMapUrl = (lat, lng) => {
  * Geocode any city/address to coordinates
  */
 export const geocodeAddress = async (address) => {
-  await loadGoogleMaps();
-  const geocoder = new google.maps.Geocoder();
-  return new Promise((resolve, reject) => {
-    geocoder.geocode({ address }, (results, status) => {
-      if (status === 'OK' && results?.[0]) {
-        const loc = results[0].geometry.location;
-        resolve({
-          latitude: typeof loc.lat === 'function' ? loc.lat() : loc.lat,
-          longitude: typeof loc.lng === 'function' ? loc.lng() : loc.lng,
-          formattedAddress: results[0].formatted_address,
-          city: results[0].address_components?.find((c) => c.types.includes('locality'))?.long_name || address,
+  const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+
+  if (typeof window !== 'undefined' && typeof window.google !== 'undefined') {
+    try {
+      await loadGoogleMaps();
+      const geocoder = new google.maps.Geocoder();
+      return await new Promise((resolve, reject) => {
+        geocoder.geocode({ address }, (results, status) => {
+          if (status === 'OK' && results?.[0]) {
+            const loc = results[0].geometry.location;
+            resolve({
+              latitude: typeof loc.lat === 'function' ? loc.lat() : loc.lat,
+              longitude: typeof loc.lng === 'function' ? loc.lng() : loc.lng,
+              formattedAddress: results[0].formatted_address,
+              city: results[0].address_components?.find((c) => c.types.includes('locality'))?.long_name || address,
+            });
+          } else {
+            reject(new Error(`Could not locate "${address}". Please check spelling.`));
+          }
         });
-      } else {
-        reject(new Error(`Could not locate "${address}". Please check spelling.`));
+      });
+    } catch (err) {
+      console.warn('Google Maps JS Geocoder failed, falling back to REST geocode:', err);
+    }
+  }
+
+  // REST API fallback
+  if (apiKey) {
+    try {
+      const res = await fetch(
+        `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(address)}&key=${apiKey}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.results?.[0]) {
+          const resObj = data.results[0];
+          const loc = resObj.geometry.location;
+          return {
+            latitude: loc.lat,
+            longitude: loc.lng,
+            formattedAddress: resObj.formatted_address,
+            city: resObj.address_components?.find((c) => c.types.includes('locality'))?.long_name || address,
+          };
+        }
       }
-    });
-  });
+    } catch (restErr) {
+      console.error('REST geocode error:', restErr);
+    }
+  }
+
+  throw new Error(`Could not locate "${address}". Please check spelling.`);
 };
 
 /**
@@ -406,17 +440,21 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
     const name = (p.displayName?.text || p.displayName || p.name || '').toLowerCase().trim();
     const primaryType = (p.primaryType || '').toLowerCase();
     const types = Array.isArray(p.types) ? p.types.map((t) => String(t).toLowerCase()) : [];
+    const allTypes = [...types, primaryType];
 
     if (isGym) {
-      const gymKeywords = ['gym', 'fitness', 'workout', 'crossfit', 'bodybuilding', 'health club', 'iron temple', 'aerobics', 'zumba'];
-      const isGymMatch = primaryType.includes('gym') || types.some((t) => t.includes('gym') || t.includes('fitness')) || gymKeywords.some((w) => name.includes(w));
-      return isGymMatch;
+      if (allTypes.some((t) => t.includes('gym') || t.includes('fitness'))) return true;
+      const gymKeywords = ['gym', 'fitness', 'workout', 'crossfit', 'bodybuilding', 'health club', 'iron temple', 'aerobics', 'zumba', 'powerhouse'];
+      return gymKeywords.some((w) => name.includes(w));
     }
 
-    // Library Search:
+    // Library Search: If Google categorizes as library, it is 100% relevant
+    if (allTypes.some((t) => t.includes('library'))) return true;
+
     const hasLibraryKeyword = [
       'library', 'pustakalaya', 'reading room', 'study point', 'self study', 
-      'study zone', 'study space', 'abhyasika', 'study circle', 'reading hall'
+      'study zone', 'study space', 'abhyasika', 'study circle', 'reading hall',
+      'digital library', 'study room', 'co study', 'peace room', 'mindspace', 'haven'
     ].some((w) => name.includes(w));
 
     // Reject non-library business types by NAME only (never check address landmarks like 'near hospital' or 'gurudwara road'!)
@@ -447,27 +485,91 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
     return true;
   };
 
-  // 1. Direct REST Places API (New) with proper pagination and radius handling
+  // 1. Direct REST Places API (New) with dual searchNearby and deep multi-synonym sweep
   if (apiKey) {
     try {
       const targetCount = maxResults && Number(maxResults) > 0 ? Number(maxResults) : 1000;
+      const allPlacesMap = new Map();
 
-      // 101% Deepest Search: Build rich query list with synonyms so no places (Reading room, Study point, Pustakalaya, etc.) are skipped
-      let queryList = [];
       const cleanLower = cleanQ.toLowerCase();
       const isCleanQGym = cleanLower.includes('gym') || cleanLower.includes('fitness') || cleanLower.includes('workout');
       const isCleanQLib = cleanLower.includes('library') || cleanLower.includes('study') || cleanLower.includes('reading') || cleanLower.includes('pustak');
+
+      // ── Step A: If GPS coordinates are available, run searchNearby by circle first ──
+      if (lat && lng) {
+        try {
+          const searchRadiusM = Math.min(Number(radius) || 5000, 50000);
+          const nearbyRes = await fetch('https://places.googleapis.com/v1/places:searchNearby', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Goog-Api-Key': apiKey,
+              'X-Goog-FieldMask':
+                'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.regularOpeningHours,places.types,places.primaryType,places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri,places.googleMapsUri',
+            },
+            body: JSON.stringify({
+              includedTypes: isGym || isCleanQGym ? ['gym', 'fitness_center'] : ['library'],
+              locationRestriction: {
+                circle: {
+                  center: { latitude: lat, longitude: lng },
+                  radius: searchRadiusM,
+                },
+              },
+              maxResultCount: 20,
+            }),
+          });
+
+          if (nearbyRes.ok) {
+            const nearbyData = await nearbyRes.json();
+            for (const p of nearbyData.places || []) {
+              if (!p.id || allPlacesMap.has(p.id)) continue;
+              if (!isRelevantPlace(p)) continue;
+
+              const placeLat = p.location?.latitude;
+              const placeLng = p.location?.longitude;
+              const distance = (placeLat != null && placeLng != null)
+                ? calculateDistance(lat, lng, placeLat, placeLng)
+                : null;
+
+              if (radius && Number(radius) > 0 && distance != null && distance > Number(radius)) {
+                continue;
+              }
+
+              allPlacesMap.set(p.id, {
+                placeId: p.id,
+                name: p.displayName?.text || p.displayName || '',
+                address: p.formattedAddress || '',
+                phone: p.nationalPhoneNumber || p.internationalPhoneNumber || '',
+                website: p.websiteUri || '',
+                mapsUrl: p.googleMapsUri || '',
+                rating: p.rating || null,
+                totalRatings: p.userRatingCount || 0,
+                lat: placeLat,
+                lng: placeLng,
+                distance,
+                distanceFormatted: formatDistance(distance),
+                isOpen: p.regularOpeningHours?.openNow ?? null,
+              });
+            }
+          }
+        } catch (nearbyErr) {
+          console.warn('SearchNearby failed, proceeding with text search:', nearbyErr);
+        }
+      }
+
+      // ── Step B: Multi-Synonym Deep Text Sweep ──
+      let queryList = [];
 
       if (isCleanQGym || (!cleanQ && isGym)) {
         const base = cleanQ || 'gym';
         queryList = [
           base,
-          'fitness center',
-          'workout gym fitness',
-          'bodybuilding health club',
-          'crossfit studio gym',
+          `fitness center near ${cleanQ}`,
+          `gym in ${cleanQ}`,
+          `workout gym in ${cleanQ}`,
+          `bodybuilding health club in ${cleanQ}`,
         ];
-      } else if (isCleanQLib || (!cleanQ && !isGym)) {
+      } else if (isCleanQLib || !cleanQ) {
         const base = cleanQ || 'library';
         queryList = [
           base,
@@ -479,15 +581,20 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
           'abhyasika reading hall',
         ];
       } else {
+        // User entered a colony or area name like "Sisodiya Colony", "MP Nagar", "Bhawar Kuan"
         queryList = [
-          cleanQ,
+          `study library in ${cleanQ}`,
+          `pustakalaya in ${cleanQ}`,
+          `reading room in ${cleanQ}`,
+          `self study point in ${cleanQ}`,
+          `library in ${cleanQ}`,
+          `digital library in ${cleanQ}`,
           `${cleanQ} library`,
           `${cleanQ} study point`,
-          `${cleanQ} reading room`,
         ];
       }
 
-      // Location configuration: handle circles <= 50km and bounding box rectangles > 50km (up to 1000km)
+      // Location configuration: handle circles <= 50km and bounding box rectangles > 50km
       let locationConfig = {};
       if (lat && lng) {
         if (radius && Number(radius) > 50000) {
@@ -514,8 +621,6 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
         }
       }
 
-      const allPlacesMap = new Map();
-
       for (const q of queryList) {
         if (allPlacesMap.size >= targetCount) break;
 
@@ -537,7 +642,8 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
             headers: {
               'Content-Type': 'application/json',
               'X-Goog-Api-Key': apiKey,
-              'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.regularOpeningHours,places.types,places.primaryType,nextPageToken',
+              'X-Goog-FieldMask':
+                'places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.regularOpeningHours,places.types,places.primaryType,places.nationalPhoneNumber,places.internationalPhoneNumber,places.websiteUri,places.googleMapsUri,nextPageToken',
             },
             body: JSON.stringify(body),
           });
@@ -565,6 +671,9 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
               placeId: p.id,
               name: p.displayName?.text || p.displayName || '',
               address: p.formattedAddress || '',
+              phone: p.nationalPhoneNumber || p.internationalPhoneNumber || '',
+              website: p.websiteUri || '',
+              mapsUrl: p.googleMapsUri || '',
               rating: p.rating || null,
               totalRatings: p.userRatingCount || 0,
               lat: placeLat,
@@ -579,7 +688,6 @@ export const searchLibrariesByText = async (query, lat, lng, radius = null, maxR
           if (!data.nextPageToken) break;
           pageToken = data.nextPageToken;
 
-          // Brief delay for nextPageToken propagation
           await new Promise((resolve) => setTimeout(resolve, 300));
         }
 

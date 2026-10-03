@@ -17,6 +17,7 @@ import {
   deleteResearchReport,
   CATEGORY_CONFIGS,
 } from '../firebase/services/marketResearchService';
+import { syncCityTargetsToFieldMarketing } from '../firebase/services/targetSyncService';
 import {
   Compass,
   Search,
@@ -42,60 +43,61 @@ import {
   ShieldCheck,
   BookmarkPlus,
   RefreshCw,
+  Send,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export const INDIA_STATES_AND_CITIES = {
   'Madhya Pradesh': [
-    'Indore', 'Pithampur', 'Bhopal', 'Gwalior', 'Jabalpur', 'Ujjain', 'Guna', 'Sagar', 'Ratlam', 'Rewa', 'Satna', 'Dewas', 'Mhow', 'Shivpuri', 'Vidisha', 'Khandwa', 'Burhanpur', 'Neemuch', 'Mandsaur', 'Chhindwara', 'Hoshangabad'
+    'Indore', 'Bhopal', 'Guna', 'Gwalior', 'Jabalpur', 'Ujjain', 'Sagar', 'Rewa', 'Satna', 'Dewas', 'Ratlam', 'Shivpuri', 'Vidisha', 'Khandwa', 'Burhanpur', 'Neemuch', 'Mandsaur', 'Chhindwara', 'Hoshangabad (Narmadapuram)', 'Pithampur', 'Mhow', 'Ashoknagar', 'Datia', 'Damoh', 'Raisen', 'Sehore', 'Betul', 'Harda', 'Khargone', 'Barwani', 'Dhar', 'Jhabua', 'Alirajpur', 'Shajapur', 'Agar Malwa', 'Seoni', 'Balaghat', 'Mandla', 'Dindori', 'Narsinghpur', 'Katni', 'Sidhi', 'Singrauli', 'Shahdol', 'Umaria', 'Anuppur', 'Panna', 'Tikamgarh', 'Chhatarpur', 'Niwari', 'Sheopur', 'Morena', 'Bhind', 'Maihar', 'Pandhurna', 'Mauganj'
   ],
   'Rajasthan': [
-    'Kota', 'Jaipur', 'Jodhpur', 'Udaipur', 'Ajmer', 'Bikaner', 'Alwar', 'Bhilwara', 'Sikar', 'Bharatpur', 'Sri Ganganagar', 'Pali', 'Chittorgarh', 'Jhunjhunu'
+    'Kota', 'Jaipur', 'Jodhpur', 'Udaipur', 'Ajmer', 'Bikaner', 'Alwar', 'Bhilwara', 'Sikar', 'Bharatpur', 'Sri Ganganagar', 'Pali', 'Chittorgarh', 'Jhunjhunu', 'Hanumangarh', 'Barmer', 'Nagaur', 'Tonk', 'Dausa', 'Bundi', 'Baran', 'Jhalawar', 'Sawai Madhopur', 'Rajsamand', 'Dungarpur', 'Banswara', 'Sirohi', 'Jaisalmer', 'Churu', 'Dholpur', 'Karauli', 'Pratapgarh', 'Beawar', 'Neem Ka Thana', 'Didwana', 'Balotra', 'Phalodi', 'Deeg', 'Kekri'
   ],
   'Uttar Pradesh': [
-    'Lucknow', 'Kanpur', 'Varanasi', 'Prayagraj', 'Agra', 'Noida', 'Greater Noida', 'Ghaziabad', 'Meerut', 'Bareilly', 'Gorakhpur', 'Jhansi', 'Aligarh', 'Mathura', 'Moradabad', 'Saharanpur'
+    'Lucknow', 'Kanpur', 'Varanasi', 'Prayagraj', 'Agra', 'Noida', 'Greater Noida', 'Ghaziabad', 'Meerut', 'Bareilly', 'Gorakhpur', 'Jhansi', 'Aligarh', 'Mathura', 'Moradabad', 'Saharanpur', 'Ayodhya', 'Firozabad', 'Muzaffarnagar', 'Budaun', 'Rampur', 'Shahjahanpur', 'Farrukhabad', 'Hapur', 'Etawah', 'Mirzapur', 'Bulandshahr', 'Sambhal', 'Amroha', 'Hardoi', 'Fatehpur', 'Raebareli', 'Orai', 'Sitapur', 'Bahraich', 'Unnao', 'Jaunpur', 'Lakhimpur', 'Hathras', 'Banda', 'Pilibhit', 'Barabanki', 'Gonda', 'Mainpuri', 'Lalitpur', 'Deoria', 'Ghazipur', 'Sultanpur', 'Azamgarh', 'Bijnor', 'Basti', 'Ballia', 'Bhadohi', 'Kasganj'
   ],
   'Delhi NCR': [
-    'New Delhi', 'South Delhi', 'Noida', 'Gurugram', 'Ghaziabad', 'Faridabad', 'North Delhi', 'West Delhi', 'East Delhi'
+    'New Delhi', 'South Delhi', 'North Delhi', 'West Delhi', 'East Delhi', 'Central Delhi', 'Noida', 'Greater Noida', 'Gurugram', 'Ghaziabad', 'Faridabad', 'Sonipat'
   ],
   'Maharashtra': [
-    'Mumbai', 'Pune', 'Nagpur', 'Nashik', 'Thane', 'Chhatrapati Sambhajinagar', 'Navi Mumbai', 'Solapur', 'Kolhapur', 'Amravati'
+    'Mumbai', 'Pune', 'Nagpur', 'Nashik', 'Thane', 'Chhatrapati Sambhajinagar', 'Navi Mumbai', 'Solapur', 'Kolhapur', 'Amravati', 'Nanded', 'Sangli', 'Jalgaon', 'Akola', 'Latur', 'Dhule', 'Ahmednagar', 'Chandrapur', 'Parbhani', 'Satara', 'Beed'
   ],
   'Gujarat': [
-    'Ahmedabad', 'Surat', 'Vadodara', 'Rajkot', 'Bhavnagar', 'Jamnagar', 'Gandhinagar', 'Anand', 'Junagadh'
+    'Ahmedabad', 'Surat', 'Vadodara', 'Rajkot', 'Bhavnagar', 'Jamnagar', 'Gandhinagar', 'Anand', 'Junagadh', 'Navsari', 'Morbi', 'Nadiad', 'Surendranagar', 'Bharuch', 'Mehsana', 'Bhuj', 'Porbandar', 'Valsad', 'Vapi', 'Gondal'
   ],
   'Bihar': [
-    'Patna', 'Gaya', 'Bhagalpur', 'Muzaffarpur', 'Purnia', 'Darbhanga', 'Begusarai', 'Bihar Sharif'
+    'Patna', 'Gaya', 'Bhagalpur', 'Muzaffarpur', 'Purnia', 'Darbhanga', 'Begusarai', 'Bihar Sharif', 'Arrah', 'Katihar', 'Munger', 'Chhapra', 'Danapur', 'Saharsa', 'Sasaram', 'Hajipur', 'Dehri', 'Siwan', 'Motihari', 'Nawada', 'Bettiah', 'Buxar', 'Kishanganj'
   ],
   'Haryana': [
-    'Gurugram', 'Faridabad', 'Panipat', 'Ambala', 'Karnal', 'Rohtak', 'Hisar', 'Sonipat', 'Panchkula'
+    'Gurugram', 'Faridabad', 'Panipat', 'Ambala', 'Karnal', 'Rohtak', 'Hisar', 'Sonipat', 'Panchkula', 'Yamunanagar', 'Sirsa', 'Bhiwani', 'Bahadurgarh', 'Jind', 'Thanesar', 'Kaithal', 'Rewari', 'Palwal'
   ],
   'Punjab': [
-    'Chandigarh', 'Ludhiana', 'Amritsar', 'Jalandhar', 'Patiala', 'Bathinda', 'Mohali'
+    'Chandigarh', 'Ludhiana', 'Amritsar', 'Jalandhar', 'Patiala', 'Bathinda', 'Mohali', 'Hoshiarpur', 'Batala', 'Pathankot', 'Moga', 'Abohar', 'Malerkotla', 'Khanna', 'Phagwara', 'Muktsar', 'Barnala', 'Firozpur'
   ],
   'Chhattisgarh': [
-    'Raipur', 'Bhilai', 'Bilaspur', 'Korba', 'Durg', 'Rajnandgaon'
+    'Raipur', 'Bhilai', 'Bilaspur', 'Korba', 'Durg', 'Rajnandgaon', 'Jagdalpur', 'Raigarh', 'Ambikapur', 'Dhamtari', 'Mahasamund'
   ],
   'Uttarakhand': [
-    'Dehradun', 'Haridwar', 'Roorkee', 'Haldwani', 'Rishikesh'
+    'Dehradun', 'Haridwar', 'Roorkee', 'Haldwani', 'Rishikesh', 'Kashipur', 'Rudrapur', 'Nainital', 'Pithoragarh'
   ],
   'Jharkhand': [
-    'Ranchi', 'Jamshedpur', 'Dhanbad', 'Bokaro'
+    'Ranchi', 'Jamshedpur', 'Dhanbad', 'Bokaro', 'Deoghar', 'Hazaribagh', 'Giridih', 'Ramgarh', 'Medininagar', 'Chas'
   ],
   'Karnataka': [
-    'Bengaluru', 'Mysuru', 'Hubballi', 'Mangaluru', 'Belagavi'
+    'Bengaluru', 'Mysuru', 'Hubballi', 'Mangaluru', 'Belagavi', 'Davanagere', 'Ballari', 'Vijayapura', 'Shivamogga', 'Tumakuru', 'Kalaburagi', 'Bidar', 'Udupi'
   ],
   'Telangana': [
-    'Hyderabad', 'Warangal', 'Nizamabad', 'Karimnagar'
+    'Hyderabad', 'Warangal', 'Nizamabad', 'Karimnagar', 'Khammam', 'Ramagundam', 'Mahbubnagar', 'Nalgonda', 'Adilabad', 'Siddipet'
   ],
   'Tamil Nadu': [
-    'Chennai', 'Coimbatore', 'Madurai', 'Tiruchirappalli', 'Salem'
+    'Chennai', 'Coimbatore', 'Madurai', 'Tiruchirappalli', 'Salem', 'Tirunelveli', 'Tiruppur', 'Ranipet', 'Nagercoil', 'Thanjavur', 'Vellore', 'Kancheepuram', 'Erode', 'Dindigul'
   ],
   'West Bengal': [
-    'Kolkata', 'Howrah', 'Durgapur', 'Asansol', 'Siliguri'
+    'Kolkata', 'Howrah', 'Durgapur', 'Asansol', 'Siliguri', 'Bardhaman', 'Malda', 'Baharampur', 'Habra', 'Kharagpur', 'Shantipur', 'Dankuni'
   ],
   'Other / Custom State': [
-    'Goa', 'Shimla', 'Jammu', 'Srinagar', 'Guwahati', 'Bhubaneswar'
+    'Goa', 'Shimla', 'Jammu', 'Srinagar', 'Guwahati', 'Bhubaneswar', 'Cuttack', 'Rourkela', 'Agartala', 'Shillong', 'Imphal', 'Aizawl', 'Kohima', 'Gangtok', 'Port Blair'
   ],
 };
 
@@ -168,6 +170,24 @@ export const MarketResearch = () => {
     },
     onError: (err) => {
       toast.error('Failed to delete report: ' + err.message);
+    },
+  });
+
+  // 5. Sync to Field Marketing Targets Mutation (Smart Delta Sync)
+  const [syncStatusData, setSyncStatusData] = useState(null);
+  const syncMutation = useMutation({
+    mutationFn: syncCityTargetsToFieldMarketing,
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['field_marketing_target_cities'] });
+      queryClient.invalidateQueries({ queryKey: ['field_marketing_targets'] });
+      setSyncStatusData(data);
+      toast.success(
+        `🚀 Synced ${data.totalPlaces} ${data.category === 'gym' ? 'Gyms' : 'Libraries'} to Field Marketing! (${data.addedCount} Fresh Added, ${data.preservedCount} Preserved)`,
+        { duration: 5500 }
+      );
+    },
+    onError: (err) => {
+      toast.error('Failed to sync to Field Marketing: ' + err.message);
     },
   });
 
@@ -410,9 +430,9 @@ export const MarketResearch = () => {
             <span className="text-[11px] font-normal text-slate-400">Click a city chip or type below</span>
           </label>
 
-          {/* Dynamic City Chips for selected state */}
+          {/* Dynamic City Chips for selected state (Top primary hubs) */}
           <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
-            {(INDIA_STATES_AND_CITIES[selectedState] || []).map((c) => (
+            {(INDIA_STATES_AND_CITIES[selectedState] || []).slice(0, 14).map((c) => (
               <button
                 key={c}
                 type="button"
@@ -431,11 +451,17 @@ export const MarketResearch = () => {
           <div className="relative">
             <input
               type="text"
+              list="city-suggestions"
               value={cityInput}
               onChange={(e) => setCityInput(e.target.value)}
               placeholder={`e.g. ${INDIA_STATES_AND_CITIES[selectedState]?.[0] || 'Indore'} or any district in ${selectedState}...`}
               className="w-full px-4 py-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
             />
+            <datalist id="city-suggestions">
+              {(INDIA_STATES_AND_CITIES[selectedState] || []).map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
           </div>
 
           {cityInput.toLowerCase().includes('indore') && (
@@ -526,7 +552,7 @@ export const MarketResearch = () => {
                   Coverage Scan Mode
                 </span>
                 <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                  💯 100% Full City
+                  ⚡ 101% Deepest Sweep
                 </span>
               </label>
               <select
@@ -534,8 +560,8 @@ export const MarketResearch = () => {
                 onChange={(e) => setScanDepth(e.target.value)}
                 className="w-full px-3 py-2 text-xs font-semibold bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <option value="exhaustive">💯 100% Full City Exhaustive Grid (All 7 Zones & Hubs - 150-250+ places)</option>
-                <option value="standard">🎯 Standard Scan (~60-100 places / 3 zones)</option>
+                <option value="exhaustive">💯 101% Deepest Multi-Area Sweep (All Colonies, Sectors & Hubs - Patient Scan)</option>
+                <option value="standard">🎯 Standard Multi-Area Scan (~60-100 places)</option>
                 <option value="quick">⚡ Quick Scan (~30-50 places / Core zone)</option>
               </select>
             </div>
@@ -607,6 +633,31 @@ export const MarketResearch = () => {
 
             {/* Action Buttons */}
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => {
+                  syncMutation.mutate({
+                    city: currentReport.city,
+                    state: currentReport.state,
+                    category: currentReport.category,
+                    places: currentReport.places,
+                    staffId: user?.uid || user?.id,
+                    staffName: user?.displayName || user?.name || 'Admin',
+                  });
+                }}
+                disabled={syncMutation.isPending}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white text-xs font-bold transition shadow-sm cursor-pointer"
+                title="Send or Sync this city's places to Field Marketing Targets (Preserves existing visits, adds newly opened places)"
+              >
+                <Send size={14} className={syncMutation.isPending ? 'animate-bounce' : ''} />
+                <span>
+                  {syncMutation.isPending
+                    ? 'Syncing Targets...'
+                    : syncStatusData?.city === currentReport.city
+                    ? '✅ Synced to Field Team'
+                    : '🚀 Send / Sync to Field Team'}
+                </span>
+              </button>
+
               {!isReportSaved ? (
                 <button
                   onClick={() => saveMutation.mutate(currentReport)}
