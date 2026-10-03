@@ -52,6 +52,7 @@ import {
   ArrowLeft,
   Settings,
   HelpCircle,
+  Zap,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
